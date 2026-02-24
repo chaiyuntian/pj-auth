@@ -1,6 +1,8 @@
 export type EnvBindings = {
   DB: D1Database;
   APP_URL?: string;
+  PUBLIC_AUTH_URL?: string;
+  CORS_ORIGINS?: string;
   ACCESS_TOKEN_TTL_SECONDS?: string;
   REFRESH_TOKEN_TTL_SECONDS?: string;
   EMAIL_VERIFICATION_TTL_SECONDS?: string;
@@ -8,6 +10,9 @@ export type EnvBindings = {
   COOKIE_NAME?: string;
   COOKIE_DOMAIN?: string;
   EXPOSE_TEST_TOKENS?: string;
+  EMAIL_FROM?: string;
+  RESEND_API_BASE_URL?: string;
+  RESEND_API_KEY?: string;
   JWT_SIGNING_KEY: string;
   ADMIN_API_KEY: string;
   OAUTH_GOOGLE_CLIENT_ID?: string;

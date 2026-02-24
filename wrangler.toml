@@ -8,6 +8,8 @@ routes = [
 ]
 
 [vars]
+PUBLIC_AUTH_URL = "https://users.pajamadot.com"
+CORS_ORIGINS = "https://users.pajamadot.com,http://127.0.0.1:8787"
 ACCESS_TOKEN_TTL_SECONDS = "900"
 REFRESH_TOKEN_TTL_SECONDS = "2592000"
 EMAIL_VERIFICATION_TTL_SECONDS = "900"
@@ -16,6 +18,7 @@ COOKIE_NAME = "pj_auth_refresh"
 COOKIE_DOMAIN = ""
 GOOGLE_DEFAULT_SCOPE = "openid email profile"
 EXPOSE_TEST_TOKENS = "false"
+EMAIL_FROM = "PajamaDot Auth <noreply@users.pajamadot.com>"
 
 [[d1_databases]]
 binding = "DB"

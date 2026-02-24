@@ -8,8 +8,11 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
+    "evolve:review": "node tools/capability-evolver/index.mjs run --repo . --target src --review",
+    "evolve:apply": "node tools/capability-evolver/index.mjs run --repo . --target src --apply",
     "db:migrate:local": "wrangler d1 migrations apply pj-auth-db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply pj-auth-db --remote"
+    "db:migrate:remote": "wrangler d1 migrations apply pj-auth-db --remote",
+    "e2e:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/e2e-smoke.ps1"
   },
   "keywords": [
     "cloudflare-workers",

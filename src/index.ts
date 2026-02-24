@@ -1,11 +1,11 @@
 import { Hono } from "hono";
-import { cors } from "hono/cors";
 import type { EnvBindings } from "./types";
 import { assertCriticalSecrets } from "./lib/config";
 import { authRoutes } from "./routes/auth";
 import { oauthRoutes } from "./routes/oauth";
 import { adminRoutes } from "./routes/admin";
 import { demoRoutes } from "./routes/demo";
+import { applyApiCors } from "./middleware/cors";
 
 const app = new Hono<{
   Bindings: EnvBindings;
@@ -15,14 +15,14 @@ const app = new Hono<{
   };
 }>();
 
-app.use(
-  "/v1/*",
-  cors({
-    origin: "*",
-    allowMethods: ["GET", "POST", "PUT", "OPTIONS"],
-    allowHeaders: ["authorization", "content-type", "x-admin-api-key"]
-  })
-);
+app.use("/v1/*", applyApiCors);
+
+app.use("*", async (context, next) => {
+  await next();
+  context.header("x-content-type-options", "nosniff");
+  context.header("x-frame-options", "DENY");
+  context.header("referrer-policy", "same-origin");
+});
 
 app.use("*", async (context, next) => {
   try {
@@ -50,12 +50,18 @@ app.get("/", (context) =>
   })
 );
 
-app.get("/healthz", (context) =>
-  context.json({
-    ok: true,
-    timestamp: new Date().toISOString()
-  })
-);
+app.get("/healthz", async (context) => {
+  const dbCheck = await context.env.DB.prepare("SELECT 1 AS ok").first<{ ok: number }>().catch(() => null);
+  const ok = dbCheck?.ok === 1;
+  return context.json(
+    {
+      ok,
+      db: ok ? "up" : "down",
+      timestamp: new Date().toISOString()
+    },
+    ok ? 200 : 503
+  );
+});
 
 app.route("/v1/auth", authRoutes);
 app.route("/v1/oauth", oauthRoutes);

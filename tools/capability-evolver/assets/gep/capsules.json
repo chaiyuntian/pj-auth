@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "capsules": [
+    {
+      "id": "refresh-evolution-backlog-02e628695456",
+      "geneId": "refresh-evolution-backlog",
+      "target": "src",
+      "summary": "Successful refresh-evolution-backlog cycle",
+      "createdAt": "2026-02-24T10:48:23.566Z",
+      "validations": []
+    },
+    {
+      "id": "add-e2e-smoke-script-d3057d50dff9",
+      "geneId": "add-e2e-smoke-script",
+      "target": "src",
+      "summary": "Successful add-e2e-smoke-script cycle",
+      "createdAt": "2026-02-24T10:47:07.383Z",
+      "validations": [
+        {
+          "command": "npm run typecheck",
+          "code": 0
+        }
+      ]
+    }
+  ]
+}

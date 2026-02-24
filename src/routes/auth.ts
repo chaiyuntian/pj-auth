@@ -36,6 +36,7 @@ import {
 } from "../lib/config";
 import { addSecondsToIso, isIsoExpired } from "../lib/time";
 import { randomToken } from "../lib/encoding";
+import { sendTransactionalEmail } from "../lib/mailer";
 
 const VERIFICATION_PURPOSE_EMAIL = "email_verify";
 const VERIFICATION_PURPOSE_PASSWORD_RESET = "password_reset";
@@ -135,6 +136,42 @@ const formatSession = (session: { id: string; accessToken: string }) => ({
   tokenType: "Bearer"
 });
 
+const sendEmailVerificationMessage = async (params: {
+  context: AuthContext;
+  email: string;
+  confirmationUrl: string;
+}): Promise<{
+  delivered: boolean;
+  provider: "resend" | "log";
+  messageId?: string;
+  reason?: string;
+}> =>
+  sendTransactionalEmail({
+    env: params.context.env,
+    to: params.email,
+    subject: "Verify your PajamaDot account",
+    text: `Please verify your account by opening this link:\n${params.confirmationUrl}\n\nIf you did not request this, ignore this email.`,
+    html: `<p>Please verify your account by clicking this link:</p><p><a href="${params.confirmationUrl}">${params.confirmationUrl}</a></p><p>If you did not request this, ignore this email.</p>`
+  });
+
+const sendPasswordResetMessage = async (params: {
+  context: AuthContext;
+  email: string;
+  resetUrl: string;
+}): Promise<{
+  delivered: boolean;
+  provider: "resend" | "log";
+  messageId?: string;
+  reason?: string;
+}> =>
+  sendTransactionalEmail({
+    env: params.context.env,
+    to: params.email,
+    subject: "Reset your PajamaDot password",
+    text: `You can reset your password by opening this link:\n${params.resetUrl}\n\nIf you did not request this, ignore this email.`,
+    html: `<p>You can reset your password by clicking this link:</p><p><a href="${params.resetUrl}">${params.resetUrl}</a></p><p>If you did not request this, ignore this email.</p>`
+  });
+
 authRoutes.post("/sign-up", async (context) => {
   const payload = await readJsonBody(context.req.raw);
   const parsed = signUpSchema.safeParse(payload);
@@ -193,6 +230,11 @@ authRoutes.post("/sign-up", async (context) => {
     ttlSeconds: getEmailVerificationTtlSeconds(context.env),
     confirmationPath: "/v1/auth/email-verification/confirm"
   });
+  const delivery = await sendEmailVerificationMessage({
+    context,
+    email: user.email,
+    confirmationUrl: verification.confirmationUrl
+  });
 
   setRefreshTokenCookie(context, tokens.refreshToken, tokens.refreshTtlSeconds);
   await writeAuditLog(context.env.DB, {
@@ -203,7 +245,9 @@ authRoutes.post("/sign-up", async (context) => {
     metadataJson: JSON.stringify({ method: "password" })
   });
 
-  console.log(`[email_verification] user=${user.id} email=${user.email} link=${verification.confirmationUrl}`);
+  console.log(
+    `[email_verification] user=${user.id} email=${user.email} link=${verification.confirmationUrl} delivered=${delivery.delivered} provider=${delivery.provider}`
+  );
 
   return context.json(
     {
@@ -215,6 +259,10 @@ authRoutes.post("/sign-up", async (context) => {
       emailVerification: {
         required: true,
         expiresAt: verification.expiresAt,
+        delivery: {
+          delivered: delivery.delivered,
+          provider: delivery.provider
+        },
         ...(shouldExposeTestTokens(context.env)
           ? { testToken: verification.token, testConfirmationUrl: verification.confirmationUrl }
           : {})
@@ -373,6 +421,11 @@ authRoutes.post("/email-verification/start", requireAuth, async (context) => {
     ttlSeconds: getEmailVerificationTtlSeconds(context.env),
     confirmationPath: "/v1/auth/email-verification/confirm"
   });
+  const delivery = await sendEmailVerificationMessage({
+    context,
+    email: user.email,
+    confirmationUrl: verification.confirmationUrl
+  });
 
   await writeAuditLog(context.env.DB, {
     id: crypto.randomUUID(),
@@ -380,11 +433,17 @@ authRoutes.post("/email-verification/start", requireAuth, async (context) => {
     actorId: user.id,
     eventType: "auth.email_verification_requested"
   });
-  console.log(`[email_verification] user=${user.id} email=${user.email} link=${verification.confirmationUrl}`);
+  console.log(
+    `[email_verification] user=${user.id} email=${user.email} link=${verification.confirmationUrl} delivered=${delivery.delivered} provider=${delivery.provider}`
+  );
 
   return context.json({
     ok: true,
     expiresAt: verification.expiresAt,
+    delivery: {
+      delivered: delivery.delivered,
+      provider: delivery.provider
+    },
     ...(shouldExposeTestTokens(context.env)
       ? { testToken: verification.token, testConfirmationUrl: verification.confirmationUrl }
       : {})
@@ -469,6 +528,7 @@ authRoutes.post("/password-reset/start", async (context) => {
   let testToken: string | undefined;
   let testConfirmationUrl: string | undefined;
   let expiresAt: string | undefined;
+  let delivery: { delivered: boolean; provider: "resend" | "log" } | undefined;
 
   if (user) {
     const token = randomToken(32);
@@ -494,6 +554,15 @@ authRoutes.post("/password-reset/start", async (context) => {
     resetUrl.searchParams.set("token", token);
     testToken = token;
     testConfirmationUrl = resetUrl.toString();
+    const sent = await sendPasswordResetMessage({
+      context,
+      email: user.email,
+      resetUrl: resetUrl.toString()
+    });
+    delivery = {
+      delivered: sent.delivered,
+      provider: sent.provider
+    };
 
     await writeAuditLog(context.env.DB, {
       id: crypto.randomUUID(),
@@ -501,12 +570,15 @@ authRoutes.post("/password-reset/start", async (context) => {
       actorId: user.id,
       eventType: "auth.password_reset_requested"
     });
-    console.log(`[password_reset] user=${user.id} email=${user.email} link=${resetUrl.toString()}`);
+    console.log(
+      `[password_reset] user=${user.id} email=${user.email} link=${resetUrl.toString()} delivered=${sent.delivered} provider=${sent.provider}`
+    );
   }
 
   return context.json({
     ok: true,
     message: "If an account exists for this email, password reset instructions were generated.",
+    ...(delivery ? { delivery } : {}),
     ...(shouldExposeTestTokens(context.env) && testToken
       ? { testToken, testConfirmationUrl, expiresAt }
       : {})

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "genes": [
+    {
+      "id": "add-e2e-smoke-script",
+      "intent": "repair",
+      "description": "Add an end-to-end smoke test script and npm command when missing."
+    },
+    {
+      "id": "tighten-cors-allowlist",
+      "intent": "repair",
+      "description": "Replace wildcard CORS allowlist with explicit production+local origins."
+    },
+    {
+      "id": "run-typecheck",
+      "intent": "validate",
+      "description": "Run TypeScript typecheck."
+    },
+    {
+      "id": "run-deploy-dry-run",
+      "intent": "validate",
+      "description": "Run Wrangler deploy dry-run to validate deployability."
+    },
+    {
+      "id": "refresh-evolution-backlog",
+      "intent": "optimize",
+      "description": "Refresh docs/EVOLUTION_BACKLOG.md from current repo signals."
+    }
+  ]
+}

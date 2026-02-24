@@ -34,13 +34,29 @@ export const shouldExposeTestTokens = (env: EnvBindings): boolean =>
   (env.EXPOSE_TEST_TOKENS?.trim().toLowerCase() ?? "") === "true";
 
 export const getAppUrl = (env: EnvBindings, request: Request): string => {
-  const configured = env.APP_URL?.trim();
+  const configured = env.PUBLIC_AUTH_URL?.trim() || env.APP_URL?.trim();
   if (configured) {
     return configured.replace(/\/+$/, "");
   }
   const url = new URL(request.url);
   return `${url.protocol}//${url.host}`;
 };
+
+export const getCorsOrigins = (env: EnvBindings): string[] => {
+  const configured = env.CORS_ORIGINS?.trim();
+  if (!configured) {
+    return ["*"];
+  }
+  return configured
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+};
+
+export const getEmailFromAddress = (env: EnvBindings): string => env.EMAIL_FROM?.trim() || "";
+
+export const getResendApiBaseUrl = (env: EnvBindings): string =>
+  env.RESEND_API_BASE_URL?.trim().replace(/\/+$/, "") || "https://api.resend.com";
 
 export const assertCriticalSecrets = (env: EnvBindings): void => {
   if (!env.JWT_SIGNING_KEY || env.JWT_SIGNING_KEY.length < 32) {

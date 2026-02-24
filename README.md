@@ -8,10 +8,13 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - Email verification flow (`start` + `confirm`) with one-time tokens.
 - Password reset flow (`start` + `confirm`) with one-time tokens.
 - Session management APIs (list sessions, revoke one, revoke others, revoke all).
+- Transactional email delivery via Resend (with safe log fallback).
 - Google OAuth (`/v1/oauth/google/start`, `/v1/oauth/google/callback`).
 - Provider config management via admin API key.
 - D1-backed user/session/oauth state.
+- DB-backed health check and explicit CORS allowlist support.
 - Demo UI + browser SDK script at `/demo` and `/sdk/pj-auth-client.js`.
+- Built-in capability evolver loop for autonomous safe mutation cycles.
 
 ## Stack
 - Cloudflare Workers (Hono runtime).
@@ -23,9 +26,11 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `src/routes/auth.ts`: password/session APIs.
 - `src/routes/oauth.ts`: Google OAuth flow.
 - `src/routes/admin.ts`: OAuth provider settings + stats.
+- `src/lib/mailer.ts`: outbound email provider integration.
 - `src/routes/demo.ts`: end-to-end browser demo and SDK script.
 - `migrations/0001_init.sql`: initial D1 schema.
 - `migrations/0002_verification_indexes.sql`: token/session indexes.
+- `tools/capability-evolver/`: autonomous analyze->mutate->validate->log engine.
 - `ROADMAP.md`: parity plan toward full Clerk-like surface.
 
 ## API Summary
@@ -48,6 +53,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `GET /v1/admin/oauth/providers/google` (`x-admin-api-key`)
 - `PUT /v1/admin/oauth/providers/google` (`x-admin-api-key`)
 - `GET /v1/admin/stats` (`x-admin-api-key`)
+- `GET /v1/admin/system/status` (`x-admin-api-key`)
 
 ## Local Setup
 1. Install dependencies:
@@ -70,6 +76,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 4. Set required secrets:
    - `npx wrangler secret put JWT_SIGNING_KEY`
    - `npx wrangler secret put ADMIN_API_KEY`
+   - `npx wrangler secret put RESEND_API_KEY` (optional, enables real email delivery)
    - `npx wrangler secret put OAUTH_GOOGLE_CLIENT_ID`
    - `npx wrangler secret put OAUTH_GOOGLE_CLIENT_SECRET`
    - `npx wrangler secret put OAUTH_GOOGLE_REDIRECT_URI`
@@ -79,9 +86,26 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
    - `npm run deploy`
 
 ## Verification/Reset Token Delivery
-- Current implementation logs generated verification/reset links to Worker logs.
+- If `RESEND_API_KEY` + `EMAIL_FROM` are configured, emails are sent through Resend.
+- If not configured, links are logged (safe fallback).
 - For local/dev testing, set `EXPOSE_TEST_TOKENS=true` in `.dev.vars` to include one-time tokens in API responses.
 - Keep `EXPOSE_TEST_TOKENS=false` in production.
+
+## Auto Evolution
+- Review cycle:
+  - `npm run evolve:review`
+- Apply one safe mutation:
+  - `npm run evolve:apply`
+- Events and reports:
+  - `tools/capability-evolver/assets/gep/events.jsonl`
+  - `tools/capability-evolver/assets/gep/capsules.json`
+  - `tools/capability-evolver/memory/reports/latest.md`
+
+## Live Smoke
+- Run against deployed domain:
+  - `npm run e2e:smoke`
+- Script path:
+  - `scripts/e2e-smoke.ps1`
 
 ## Configure Google OAuth
 Use one of these approaches:
@@ -126,4 +150,5 @@ curl -X POST https://users.pajamadot.com/v1/auth/sign-up \
 - Use long, random `JWT_SIGNING_KEY` and rotate periodically.
 - Never expose `ADMIN_API_KEY` client-side.
 - Restrict CORS origins for production.
-- Add real outbound email/SMS delivery integration before production launch.
+- Set `PUBLIC_AUTH_URL` to your production auth domain.
+- Enable rate-limiting / bot protection on auth endpoints before heavy traffic.

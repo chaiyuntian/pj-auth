@@ -4,6 +4,7 @@ import type { EnvBindings } from "../types";
 import { getGoogleProviderConfig, upsertGoogleProvider, writeAuditLog } from "../lib/db";
 import { requireAdminApiKey } from "../middleware/require-admin";
 import { readJsonBody } from "../lib/request";
+import { getCorsOrigins, getEmailFromAddress } from "../lib/config";
 
 const updateGoogleProviderSchema = z.object({
   enabled: z.boolean().optional(),
@@ -95,5 +96,33 @@ adminRoutes.get("/stats", async (context) => {
   return context.json({
     users: users?.count ?? 0,
     activeSessions: sessions?.count ?? 0
+  });
+});
+
+adminRoutes.get("/system/status", async (context) => {
+  const google = await getGoogleProviderConfig(context.env.DB, context.env);
+  const dbCheck = await context.env.DB.prepare("SELECT 1 as ok").first<{ ok: number }>().catch(() => null);
+
+  return context.json({
+    db: {
+      healthy: dbCheck?.ok === 1
+    },
+    cors: {
+      origins: getCorsOrigins(context.env)
+    },
+    oauth: {
+      google: {
+        enabled: google.enabled,
+        hasClientId: Boolean(google.clientId),
+        hasClientSecret: Boolean(google.clientSecret),
+        hasRedirectUri: Boolean(google.redirectUri)
+      }
+    },
+    email: {
+      provider: context.env.RESEND_API_KEY ? "resend" : "log_only",
+      hasApiKey: Boolean(context.env.RESEND_API_KEY),
+      fromAddress: getEmailFromAddress(context.env),
+      configured: Boolean(context.env.RESEND_API_KEY && getEmailFromAddress(context.env))
+    }
   });
 });
