@@ -23,7 +23,7 @@ Build a Cloudflare-native auth platform that converges toward Clerk-like functio
 - [ ] API keys and service account auth flows.
 
 ## Phase 2: Advanced Controls
-- [ ] Auth endpoint rate-limiting and abuse protection.
+- [x] Auth endpoint rate-limiting and abuse protection (D1 fixed-window).
 - [ ] Turnstile challenge for suspicious auth actions.
 - [ ] WebAuthn / passkey support.
 - [ ] Fine-grained RBAC and policy engine.

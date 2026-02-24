@@ -7,6 +7,9 @@ export type EnvBindings = {
   REFRESH_TOKEN_TTL_SECONDS?: string;
   EMAIL_VERIFICATION_TTL_SECONDS?: string;
   PASSWORD_RESET_TTL_SECONDS?: string;
+  AUTH_RATE_LIMIT_ENABLED?: string;
+  AUTH_RATE_LIMIT_MAX_REQUESTS?: string;
+  AUTH_RATE_LIMIT_WINDOW_SECONDS?: string;
   COOKIE_NAME?: string;
   COOKIE_DOMAIN?: string;
   EXPOSE_TEST_TOKENS?: string;

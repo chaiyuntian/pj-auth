@@ -16,6 +16,10 @@ Protocol-style self-evolution engine for this repository.
   - `node tools/capability-evolver/index.mjs run --repo . --target src --apply`
 - Force mutation:
   - `node tools/capability-evolver/index.mjs run --repo . --target src --apply --mutation add-e2e-smoke-script`
+- Loop mode (recommended for autonomous refinement):
+  - `EVOLVE_STRATEGY=innovate node tools/capability-evolver/index.mjs --loop --repo . --target src --apply`
+- Finite loop run (for controlled execution):
+  - `EVOLVE_STRATEGY=innovate node tools/capability-evolver/index.mjs --loop --repo . --target src --apply --interval-ms 2000 --heartbeat-ms 1000 --max-cycles 2`
 
 ## State Artifacts
 - `tools/capability-evolver/assets/gep/genes.json`
@@ -25,3 +29,9 @@ Protocol-style self-evolution engine for this repository.
 
 ## Operating Rule
 Run `--review` first in a new scope, then `--apply`.
+
+## Strategy Presets
+- `balanced`
+- `innovate`
+- `harden`
+- `repair-only`

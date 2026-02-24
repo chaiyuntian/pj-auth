@@ -2,6 +2,36 @@
   "version": 1,
   "capsules": [
     {
+      "id": "run-typecheck-99691fce9dd7",
+      "geneId": "run-typecheck",
+      "target": "src",
+      "summary": "Successful run-typecheck cycle",
+      "createdAt": "2026-02-24T13:03:09.912Z",
+      "validations": [
+        {
+          "command": "npm run typecheck",
+          "code": 0
+        }
+      ]
+    },
+    {
+      "id": "add-auth-rate-limit-middleware-397735cd76a1",
+      "geneId": "add-auth-rate-limit-middleware",
+      "target": "src",
+      "summary": "Successful add-auth-rate-limit-middleware cycle",
+      "createdAt": "2026-02-24T13:03:05.643Z",
+      "validations": [
+        {
+          "command": "npm run typecheck",
+          "code": 0
+        },
+        {
+          "command": "npx wrangler deploy --dry-run",
+          "code": 0
+        }
+      ]
+    },
+    {
       "id": "refresh-evolution-backlog-02e628695456",
       "geneId": "refresh-evolution-backlog",
       "target": "src",

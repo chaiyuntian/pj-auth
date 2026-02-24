@@ -11,6 +11,20 @@ const parsePositiveInt = (value: string | undefined, fallback: number): number =
   return parsed;
 };
 
+const parseBoolean = (value: string | undefined, fallback: boolean): boolean => {
+  if (!value) {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+};
+
 export const getAccessTokenTtlSeconds = (env: EnvBindings): number =>
   parsePositiveInt(env.ACCESS_TOKEN_TTL_SECONDS, 15 * 60);
 
@@ -22,6 +36,18 @@ export const getEmailVerificationTtlSeconds = (env: EnvBindings): number =>
 
 export const getPasswordResetTtlSeconds = (env: EnvBindings): number =>
   parsePositiveInt(env.PASSWORD_RESET_TTL_SECONDS, 15 * 60);
+
+export const getAuthRateLimitSettings = (
+  env: EnvBindings
+): {
+  enabled: boolean;
+  maxRequests: number;
+  windowSeconds: number;
+} => ({
+  enabled: parseBoolean(env.AUTH_RATE_LIMIT_ENABLED, true),
+  maxRequests: parsePositiveInt(env.AUTH_RATE_LIMIT_MAX_REQUESTS, 120),
+  windowSeconds: parsePositiveInt(env.AUTH_RATE_LIMIT_WINDOW_SECONDS, 60)
+});
 
 export const getCookieName = (env: EnvBindings): string => env.COOKIE_NAME?.trim() || "pj_auth_refresh";
 

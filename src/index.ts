@@ -6,6 +6,7 @@ import { oauthRoutes } from "./routes/oauth";
 import { adminRoutes } from "./routes/admin";
 import { demoRoutes } from "./routes/demo";
 import { applyApiCors } from "./middleware/cors";
+import { createAuthRateLimitMiddleware } from "./middleware/rate-limit";
 
 const app = new Hono<{
   Bindings: EnvBindings;
@@ -16,6 +17,11 @@ const app = new Hono<{
 }>();
 
 app.use("/v1/*", applyApiCors);
+
+const authRateLimit = createAuthRateLimitMiddleware();
+
+app.use("/v1/auth/*", authRateLimit);
+app.use("/v1/oauth/*", authRateLimit);
 
 app.use("*", async (context, next) => {
   await next();

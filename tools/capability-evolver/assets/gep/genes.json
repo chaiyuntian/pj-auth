@@ -2,6 +2,11 @@
   "version": 1,
   "genes": [
     {
+      "id": "add-auth-rate-limit-middleware",
+      "intent": "innovate",
+      "description": "Add D1-backed fixed-window rate limiting for auth and OAuth endpoints."
+    },
+    {
       "id": "add-e2e-smoke-script",
       "intent": "repair",
       "description": "Add an end-to-end smoke test script and npm command when missing."

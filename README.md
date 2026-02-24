@@ -13,6 +13,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - Provider config management via admin API key.
 - D1-backed user/session/oauth state.
 - DB-backed health check and explicit CORS allowlist support.
+- D1-backed auth rate limiting for `/v1/auth/*` and `/v1/oauth/*`.
 - Demo UI + browser SDK script at `/demo` and `/sdk/pj-auth-client.js`.
 - Built-in capability evolver loop for autonomous safe mutation cycles.
 
@@ -30,6 +31,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `src/routes/demo.ts`: end-to-end browser demo and SDK script.
 - `migrations/0001_init.sql`: initial D1 schema.
 - `migrations/0002_verification_indexes.sql`: token/session indexes.
+- `migrations/0003_rate_limits.sql`: D1 fixed-window rate-limit store.
 - `tools/capability-evolver/`: autonomous analyze->mutate->validate->log engine.
 - `ROADMAP.md`: parity plan toward full Clerk-like surface.
 
@@ -96,6 +98,10 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
   - `npm run evolve:review`
 - Apply one safe mutation:
   - `npm run evolve:apply`
+- Continuous loop mode:
+  - `EVOLVE_STRATEGY=innovate npm run evolve:loop`
+- Controlled finite loop run:
+  - `EVOLVE_STRATEGY=innovate node tools/capability-evolver/index.mjs --loop --repo . --target src --apply --interval-ms 2000 --heartbeat-ms 1000 --max-cycles 2`
 - Events and reports:
   - `tools/capability-evolver/assets/gep/events.jsonl`
   - `tools/capability-evolver/assets/gep/capsules.json`
