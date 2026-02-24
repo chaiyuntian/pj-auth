@@ -1,55 +1,81 @@
 param(
   [string]$DatabaseName = "pj-auth-db",
   [string]$DatabaseLocation = "enam",
-  [switch]$ApplyRoute,
-  [string]$CustomDomain = "users.pajamadot.com"
+  [string]$SecretsFile = ".prod.secrets.psd1",
+  [switch]$SkipSecrets
 )
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "Creating D1 database '$DatabaseName'..."
-$createOutput = npx wrangler d1 create $DatabaseName --location $DatabaseLocation 2>&1
-$createOutput | ForEach-Object { Write-Host $_ }
+function Invoke-LoggedCommand {
+  param([string]$Command)
+  Write-Host ">> $Command"
+  Invoke-Expression $Command
+}
 
-$dbIdLine = $createOutput | Select-String -Pattern 'database_id\s*=\s*"([^"]+)"' | Select-Object -First 1
-if ($dbIdLine) {
-  $dbId = $dbIdLine.Matches[0].Groups[1].Value
-  Write-Host "Detected database_id: $dbId"
-  $wranglerPath = Join-Path $PSScriptRoot "..\\wrangler.toml"
-  (Get-Content $wranglerPath) `
-    -replace 'database_id\s*=\s*"[^"]+"', "database_id = `"$dbId`"" `
-    | Set-Content $wranglerPath
-  Write-Host "Updated wrangler.toml with D1 database_id."
+Write-Host "Checking Wrangler authentication"
+Invoke-LoggedCommand "npx wrangler whoami | Out-Null"
+
+Write-Host "Resolving D1 database: $DatabaseName"
+$dbListRaw = Invoke-Expression "npx wrangler d1 list --json"
+$dbList = $dbListRaw | ConvertFrom-Json
+$existing = $dbList | Where-Object { $_.name -eq $DatabaseName } | Select-Object -First 1
+$databaseId = $null
+
+if ($existing) {
+  $databaseId = $existing.uuid
+  Write-Host "Using existing D1 database $DatabaseName ($databaseId)"
 } else {
-  Write-Warning "Could not detect database_id automatically. Update wrangler.toml manually."
-}
-
-if ($ApplyRoute) {
-  $wranglerPath = Join-Path $PSScriptRoot "..\\wrangler.toml"
-  $content = Get-Content $wranglerPath -Raw
-  if ($content -notmatch 'routes\s*=\s*\[') {
-    $routeBlock = @"
-routes = [
-  { pattern = "$CustomDomain", custom_domain = true }
-]
-
-"@
-    if ($content -match 'workers_dev\s*=\s*(true|false)\s*') {
-      $updated = [regex]::Replace($content, 'workers_dev\s*=\s*(true|false)\s*', { param($m) "$($m.Value)`r`n`r`n$routeBlock" }, 1)
-      Set-Content $wranglerPath $updated
-    } else {
-      Set-Content $wranglerPath ($routeBlock + $content)
-    }
-    Write-Host "Added custom domain route for $CustomDomain."
+  Write-Host "Creating D1 database $DatabaseName in $DatabaseLocation"
+  $createOut = Invoke-Expression "npx wrangler d1 create $DatabaseName --location $DatabaseLocation"
+  if ($createOut -match 'database_id = "([^"]+)"') {
+    $databaseId = $Matches[1]
   } else {
-    Write-Host "routes block already exists; skipped automatic route patch."
+    throw "Failed to parse database_id from wrangler output."
   }
+  Write-Host "Created D1 database $DatabaseName ($databaseId)"
 }
 
-Write-Host "Applying remote migrations..."
-npm run db:migrate:remote
+if (-not $databaseId) {
+  throw "Unable to determine D1 database_id."
+}
 
-Write-Host "Deploying worker..."
-npm run deploy
+Write-Host "Updating wrangler.toml database_id"
+$wranglerPath = "wrangler.toml"
+$wranglerRaw = Get-Content -Path $wranglerPath -Raw
+$updatedWrangler = [regex]::Replace($wranglerRaw, 'database_id\s*=\s*"[^"]*"', "database_id = `"$databaseId`"", 1)
+if ($updatedWrangler -ne $wranglerRaw) {
+  Set-Content -Path $wranglerPath -Value $updatedWrangler -NoNewline
+  Write-Host "wrangler.toml updated with database_id=$databaseId"
+} else {
+  Write-Warning "Could not locate database_id line in wrangler.toml; update manually if needed."
+}
+
+if (-not $SkipSecrets) {
+  if (Test-Path $SecretsFile) {
+    Write-Host "Applying secrets from $SecretsFile"
+    $secrets = Import-PowerShellDataFile $SecretsFile
+    foreach ($entry in $secrets.GetEnumerator()) {
+      $name = $entry.Key
+      $value = [string]$entry.Value
+      if ([string]::IsNullOrWhiteSpace($value)) {
+        Write-Warning "Skipping empty secret value for $name"
+        continue
+      }
+      Write-Host "Setting secret: $name"
+      $value | npx wrangler secret put $name | Out-Null
+    }
+  } else {
+    Write-Warning "Secrets file $SecretsFile not found. Skipping secret upload."
+  }
+} else {
+  Write-Host "Skipping secret upload (--SkipSecrets)"
+}
+
+Write-Host "Applying remote D1 migrations"
+Invoke-LoggedCommand "npx wrangler d1 migrations apply $DatabaseName --remote"
+
+Write-Host "Deploying Worker"
+Invoke-LoggedCommand "npx wrangler deploy"
 
 Write-Host "Bootstrap complete."

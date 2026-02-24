@@ -8,7 +8,7 @@ import {
   findOAuthAccount,
   findUserByEmail,
   findUserById,
-  getGoogleProviderConfig,
+  getEffectiveGoogleProviderConfig,
   updateUserProfile,
   upsertOAuthAccount,
   writeAuditLog
@@ -19,6 +19,7 @@ import { createSessionAndTokens, readRequestIp } from "../lib/auth";
 import { setRefreshTokenCookie } from "../lib/cookies";
 import { appendQuery, publicUser } from "../lib/http";
 import { getAppUrl } from "../lib/config";
+import { assessAndRecordSessionRisk } from "../lib/session-risk";
 
 const tokenResponseSchema = z.object({
   access_token: z.string(),
@@ -111,7 +112,7 @@ const fetchGoogleUser = async (accessToken: string) => {
 export const oauthRoutes = new Hono<{ Bindings: EnvBindings }>();
 
 oauthRoutes.get("/google/start", async (context) => {
-  const config = await getGoogleProviderConfig(context.env.DB, context.env);
+  const config = await getEffectiveGoogleProviderConfig(context.env.DB, context.env, context.req.raw);
   if (!config.enabled || !config.clientId || !config.clientSecret || !config.redirectUri) {
     return context.json(
       {
@@ -175,7 +176,7 @@ oauthRoutes.get("/google/callback", async (context) => {
     );
   }
 
-  const config = await getGoogleProviderConfig(context.env.DB, context.env);
+  const config = await getEffectiveGoogleProviderConfig(context.env.DB, context.env, context.req.raw);
   if (!config.clientId || !config.clientSecret || !config.redirectUri) {
     return context.json(
       {
@@ -264,6 +265,14 @@ oauthRoutes.get("/google/callback", async (context) => {
     ipAddress: readRequestIp(context.req.raw)
   });
   setRefreshTokenCookie(context, tokens.refreshToken, tokens.refreshTtlSeconds);
+  const sessionRisk = await assessAndRecordSessionRisk({
+    db: context.env.DB,
+    userId,
+    sessionId: tokens.sessionId,
+    ipAddress: readRequestIp(context.req.raw),
+    userAgent: context.req.header("user-agent") ?? null,
+    eventType: "auth.sign_in_google"
+  });
 
   await writeAuditLog(context.env.DB, {
     id: crypto.randomUUID(),
@@ -298,6 +307,14 @@ oauthRoutes.get("/google/callback", async (context) => {
       id: tokens.sessionId,
       accessToken: tokens.accessToken,
       tokenType: "Bearer"
+    },
+    sessionRisk: {
+      score: sessionRisk.score,
+      level: sessionRisk.level,
+      reasons: sessionRisk.reasons,
+      stepUpRecommended: sessionRisk.stepUpRecommended,
+      autoRevokedOtherSessions: sessionRisk.autoRevokedOtherSessions,
+      revokedCount: sessionRisk.revokedCount
     }
   });
 });

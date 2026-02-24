@@ -4,7 +4,8 @@ import type { EnvBindings } from "../types";
 import { getGoogleProviderConfig, upsertGoogleProvider, writeAuditLog } from "../lib/db";
 import { requireAdminApiKey } from "../middleware/require-admin";
 import { readJsonBody } from "../lib/request";
-import { getCorsOrigins, getEmailFromAddress } from "../lib/config";
+import { getCorsOrigins, getEmailFromAddress, getTurnstileSettings } from "../lib/config";
+import { retryDueWebhookDeliveries } from "../lib/webhooks";
 
 const updateGoogleProviderSchema = z.object({
   enabled: z.boolean().optional(),
@@ -101,17 +102,28 @@ adminRoutes.get("/stats", async (context) => {
     .prepare("SELECT COUNT(*) as count FROM teams")
     .first<{ count: number }>()
     .catch(() => ({ count: 0 }));
+  const projects = await context.env.DB
+    .prepare("SELECT COUNT(*) as count FROM projects")
+    .first<{ count: number }>()
+    .catch(() => ({ count: 0 }));
+  const passkeys = await context.env.DB
+    .prepare("SELECT COUNT(*) as count FROM passkey_credentials WHERE revoked_at IS NULL")
+    .first<{ count: number }>()
+    .catch(() => ({ count: 0 }));
   return context.json({
     users: users?.count ?? 0,
     activeSessions: sessions?.count ?? 0,
     organizations: organizations?.count ?? 0,
-    teams: teams?.count ?? 0
+    teams: teams?.count ?? 0,
+    projects: projects?.count ?? 0,
+    activePasskeys: passkeys?.count ?? 0
   });
 });
 
 adminRoutes.get("/system/status", async (context) => {
   const google = await getGoogleProviderConfig(context.env.DB, context.env);
   const dbCheck = await context.env.DB.prepare("SELECT 1 as ok").first<{ ok: number }>().catch(() => null);
+  const turnstile = getTurnstileSettings(context.env);
 
   return context.json({
     db: {
@@ -133,6 +145,27 @@ adminRoutes.get("/system/status", async (context) => {
       hasApiKey: Boolean(context.env.RESEND_API_KEY),
       fromAddress: getEmailFromAddress(context.env),
       configured: Boolean(context.env.RESEND_API_KEY && getEmailFromAddress(context.env))
+    },
+    turnstile: {
+      enabled: turnstile.enabled,
+      configured: Boolean(turnstile.secretKey)
     }
+  });
+});
+
+adminRoutes.post("/webhooks/retry", async (context) => {
+  const payload = (await readJsonBody<{ limit?: number }>(context.req.raw)) ?? {};
+  const limit =
+    typeof payload.limit === "number" && Number.isFinite(payload.limit) && payload.limit > 0
+      ? Math.min(Math.floor(payload.limit), 200)
+      : 50;
+
+  const result = await retryDueWebhookDeliveries({
+    env: context.env,
+    limit
+  });
+  return context.json({
+    ok: true,
+    processed: result.processed
   });
 });

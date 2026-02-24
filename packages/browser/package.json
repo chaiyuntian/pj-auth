@@ -1,0 +1,11 @@
+{
+  "name": "@pajamadot/auth-browser",
+  "version": "0.1.0",
+  "description": "Browser SDK for pj-auth",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "license": "MIT"
+}

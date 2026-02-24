@@ -1,0 +1,14 @@
+{
+  "name": "@pajamadot/auth-react",
+  "version": "0.1.0",
+  "description": "React bindings for pj-auth browser client",
+  "type": "module",
+  "main": "index.js",
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "dependencies": {
+    "@pajamadot/auth-browser": "0.1.0"
+  },
+  "license": "MIT"
+}

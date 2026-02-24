@@ -22,6 +22,11 @@
       "description": "Run TypeScript typecheck."
     },
     {
+      "id": "run-e2e-smoke",
+      "intent": "validate",
+      "description": "Run deployed end-to-end smoke flow."
+    },
+    {
       "id": "run-deploy-dry-run",
       "intent": "validate",
       "description": "Run Wrangler deploy dry-run to validate deployability."

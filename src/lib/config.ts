@@ -49,6 +49,18 @@ export const getAuthRateLimitSettings = (
   windowSeconds: parsePositiveInt(env.AUTH_RATE_LIMIT_WINDOW_SECONDS, 60)
 });
 
+export const getTurnstileSettings = (
+  env: EnvBindings
+): {
+  enabled: boolean;
+  secretKey: string;
+  apiBaseUrl: string;
+} => ({
+  enabled: parseBoolean(env.TURNSTILE_ENABLED, false),
+  secretKey: env.TURNSTILE_SECRET_KEY?.trim() ?? "",
+  apiBaseUrl: env.TURNSTILE_API_BASE_URL?.trim().replace(/\/+$/, "") || "https://challenges.cloudflare.com"
+});
+
 export const getCookieName = (env: EnvBindings): string => env.COOKIE_NAME?.trim() || "pj_auth_refresh";
 
 export const getCookieDomain = (env: EnvBindings): string | null => {

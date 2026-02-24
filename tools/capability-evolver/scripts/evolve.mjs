@@ -261,6 +261,12 @@ const evaluateGenes = (signals, genes, strategy) => {
     );
   }
 
+  if (signals.hasE2ESmokeNpmScript && signals.hasE2ESmokeScriptFile) {
+    candidates.push(
+      candidate(genesById, "run-e2e-smoke", 72, "E2E smoke should stay green for release confidence.")
+    );
+  }
+
   if (signals.hasDeployScript) {
     candidates.push(
       candidate(genesById, "run-deploy-dry-run", 66, "Deploy dry-run validates release readiness.")
@@ -749,6 +755,12 @@ const runTypecheckGene = (signals) => ({
   validations: [{ command: "npm run typecheck", cwd: signals.repoRoot }]
 });
 
+const runE2ESmokeGene = (signals) => ({
+  note: "Running end-to-end smoke validation.",
+  changedFiles: [],
+  validations: [{ command: "npm run e2e:smoke", cwd: signals.repoRoot }]
+});
+
 const runDeployDryRunGene = (signals) => ({
   note: "Running deploy dry-run validation.",
   changedFiles: [],
@@ -804,6 +816,8 @@ const applyGene = (selected, signals, rollbackStack) => {
       return tightenCorsAllowlist(signals, rollbackStack);
     case "run-typecheck":
       return runTypecheckGene(signals);
+    case "run-e2e-smoke":
+      return runE2ESmokeGene(signals);
     case "run-deploy-dry-run":
       return runDeployDryRunGene(signals);
     case "refresh-evolution-backlog":

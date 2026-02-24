@@ -12,12 +12,17 @@ import { clearRefreshTokenCookie, readRefreshTokenCookie, setRefreshTokenCookie 
 import {
   createUser,
   createVerificationCode,
+  createApiKey,
   findUserByEmail,
   findUserById,
   invalidateVerificationCodes,
   listOrganizationsForUser,
+  listLatestSessionRiskForUser,
+  listSessionRiskEventsForUser,
+  listUserApiKeys,
   listUserSessions,
   revokeAllUserSessions,
+  revokeUserApiKey,
   revokeOtherUserSessions,
   revokeSession,
   revokeUserSession,
@@ -38,6 +43,8 @@ import {
 import { addSecondsToIso, isIsoExpired } from "../lib/time";
 import { randomToken } from "../lib/encoding";
 import { sendTransactionalEmail } from "../lib/mailer";
+import { assertTurnstileIfEnabled } from "../lib/turnstile";
+import { assessAndRecordSessionRisk } from "../lib/session-risk";
 
 const VERIFICATION_PURPOSE_EMAIL = "email_verify";
 const VERIFICATION_PURPOSE_PASSWORD_RESET = "password_reset";
@@ -45,12 +52,14 @@ const VERIFICATION_PURPOSE_PASSWORD_RESET = "password_reset";
 const signUpSchema = z.object({
   email: z.string().email().min(3).max(320),
   password: z.string().min(8).max(128),
-  fullName: z.string().min(1).max(200).optional()
+  fullName: z.string().min(1).max(200).optional(),
+  turnstileToken: z.string().min(10).optional()
 });
 
 const signInSchema = z.object({
   email: z.string().email().min(3).max(320),
-  password: z.string().min(8).max(128)
+  password: z.string().min(8).max(128),
+  turnstileToken: z.string().min(10).optional()
 });
 
 const refreshSchema = z.object({
@@ -62,12 +71,19 @@ const verificationConfirmSchema = z.object({
 });
 
 const passwordResetStartSchema = z.object({
-  email: z.string().email().min(3).max(320)
+  email: z.string().email().min(3).max(320),
+  turnstileToken: z.string().min(10).optional()
 });
 
 const passwordResetConfirmSchema = z.object({
   token: z.string().min(16),
   newPassword: z.string().min(8).max(128)
+});
+
+const createPersonalApiKeySchema = z.object({
+  name: z.string().min(2).max(120),
+  scopes: z.array(z.string().min(1).max(120)).max(50).optional(),
+  expiresInDays: z.number().int().positive().max(3650).optional()
 });
 
 const invalidBody = (issues: z.ZodIssue[]) => ({
@@ -77,6 +93,51 @@ const invalidBody = (issues: z.ZodIssue[]) => ({
     issues
   }
 });
+
+const parseScopesJson = (rawScopes: string | null): string[] => {
+  if (!rawScopes) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(rawScopes);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((value): value is string => typeof value === "string");
+  } catch {
+    return [];
+  }
+};
+
+const scoreToRiskLevel = (score: number): "low" | "medium" | "high" | "critical" => {
+  if (score >= 80) {
+    return "critical";
+  }
+  if (score >= 60) {
+    return "high";
+  }
+  if (score >= 30) {
+    return "medium";
+  }
+  return "low";
+};
+
+const parseRiskReason = (reason: string): { source: string; signals: string[] } => {
+  const separator = reason.indexOf(":");
+  if (separator === -1) {
+    return { source: "unknown", signals: reason ? [reason] : [] };
+  }
+  const source = reason.slice(0, separator);
+  const signalsRaw = reason.slice(separator + 1);
+  const signals =
+    signalsRaw && signalsRaw !== "baseline"
+      ? signalsRaw
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : [];
+  return { source, signals };
+};
 
 export const authRoutes = new Hono<{
   Bindings: EnvBindings;
@@ -193,6 +254,24 @@ authRoutes.post("/sign-up", async (context) => {
     );
   }
 
+  const turnstile = await assertTurnstileIfEnabled({
+    env: context.env,
+    request: context.req.raw,
+    token: parsed.data.turnstileToken
+  });
+  if (!turnstile.ok) {
+    return context.json(
+      {
+        error: {
+          code: turnstile.code,
+          message: turnstile.message,
+          detail: turnstile.detail
+        }
+      },
+      turnstile.code === "TURNSTILE_NOT_CONFIGURED" ? 500 : 400
+    );
+  }
+
   const userId = crypto.randomUUID();
   const password = await createPasswordHash(parsed.data.password);
   await createUser(context.env.DB, {
@@ -238,6 +317,14 @@ authRoutes.post("/sign-up", async (context) => {
   });
 
   setRefreshTokenCookie(context, tokens.refreshToken, tokens.refreshTtlSeconds);
+  const signUpRisk = await assessAndRecordSessionRisk({
+    db: context.env.DB,
+    userId: user.id,
+    sessionId: tokens.sessionId,
+    ipAddress: readRequestIp(context.req.raw),
+    userAgent: context.req.header("user-agent") ?? null,
+    eventType: "auth.sign_up"
+  });
   await writeAuditLog(context.env.DB, {
     id: crypto.randomUUID(),
     actorType: "user",
@@ -267,6 +354,12 @@ authRoutes.post("/sign-up", async (context) => {
         ...(shouldExposeTestTokens(context.env)
           ? { testToken: verification.token, testConfirmationUrl: verification.confirmationUrl }
           : {})
+      },
+      sessionRisk: {
+        score: signUpRisk.score,
+        level: signUpRisk.level,
+        reasons: signUpRisk.reasons,
+        stepUpRecommended: signUpRisk.stepUpRecommended
       }
     },
     201
@@ -290,6 +383,24 @@ authRoutes.post("/sign-in", async (context) => {
         }
       },
       401
+    );
+  }
+
+  const turnstile = await assertTurnstileIfEnabled({
+    env: context.env,
+    request: context.req.raw,
+    token: parsed.data.turnstileToken
+  });
+  if (!turnstile.ok) {
+    return context.json(
+      {
+        error: {
+          code: turnstile.code,
+          message: turnstile.message,
+          detail: turnstile.detail
+        }
+      },
+      turnstile.code === "TURNSTILE_NOT_CONFIGURED" ? 500 : 400
     );
   }
 
@@ -318,6 +429,14 @@ authRoutes.post("/sign-in", async (context) => {
   });
 
   setRefreshTokenCookie(context, tokens.refreshToken, tokens.refreshTtlSeconds);
+  const signInRisk = await assessAndRecordSessionRisk({
+    db: context.env.DB,
+    userId: user.id,
+    sessionId: tokens.sessionId,
+    ipAddress: readRequestIp(context.req.raw),
+    userAgent: context.req.header("user-agent") ?? null,
+    eventType: "auth.sign_in"
+  });
   await writeAuditLog(context.env.DB, {
     id: crypto.randomUUID(),
     actorType: "user",
@@ -331,7 +450,15 @@ authRoutes.post("/sign-in", async (context) => {
     session: formatSession({
       id: tokens.sessionId,
       accessToken: tokens.accessToken
-    })
+    }),
+    sessionRisk: {
+      score: signInRisk.score,
+      level: signInRisk.level,
+      reasons: signInRisk.reasons,
+      stepUpRecommended: signInRisk.stepUpRecommended,
+      autoRevokedOtherSessions: signInRisk.autoRevokedOtherSessions,
+      revokedCount: signInRisk.revokedCount
+    }
   });
 });
 
@@ -384,12 +511,28 @@ authRoutes.post("/token/refresh", async (context) => {
   }
 
   setRefreshTokenCookie(context, refreshed.refreshToken, refreshed.refreshTtlSeconds);
+  const refreshRisk = await assessAndRecordSessionRisk({
+    db: context.env.DB,
+    userId: refreshed.userId,
+    sessionId: refreshed.sessionId,
+    ipAddress: readRequestIp(context.req.raw),
+    userAgent: context.req.header("user-agent") ?? null,
+    eventType: "auth.refresh"
+  });
   return context.json({
     user: publicUser(user),
     session: formatSession({
       id: refreshed.sessionId,
       accessToken: refreshed.accessToken
-    })
+    }),
+    sessionRisk: {
+      score: refreshRisk.score,
+      level: refreshRisk.level,
+      reasons: refreshRisk.reasons,
+      stepUpRecommended: refreshRisk.stepUpRecommended,
+      autoRevokedOtherSessions: refreshRisk.autoRevokedOtherSessions,
+      revokedCount: refreshRisk.revokedCount
+    }
   });
 });
 
@@ -526,6 +669,23 @@ authRoutes.post("/password-reset/start", async (context) => {
   }
 
   const user = await findUserByEmail(context.env.DB, parsed.data.email);
+  const turnstile = await assertTurnstileIfEnabled({
+    env: context.env,
+    request: context.req.raw,
+    token: parsed.data.turnstileToken
+  });
+  if (!turnstile.ok) {
+    return context.json(
+      {
+        error: {
+          code: turnstile.code,
+          message: turnstile.message,
+          detail: turnstile.detail
+        }
+      },
+      turnstile.code === "TURNSTILE_NOT_CONFIGURED" ? 500 : 400
+    );
+  }
   let testToken: string | undefined;
   let testConfirmationUrl: string | undefined;
   let expiresAt: string | undefined;
@@ -644,6 +804,14 @@ authRoutes.post("/password-reset/confirm", async (context) => {
     ipAddress: readRequestIp(context.req.raw)
   });
   setRefreshTokenCookie(context, tokens.refreshToken, tokens.refreshTtlSeconds);
+  const resetRisk = await assessAndRecordSessionRisk({
+    db: context.env.DB,
+    userId: user.id,
+    sessionId: tokens.sessionId,
+    ipAddress: readRequestIp(context.req.raw),
+    userAgent: context.req.header("user-agent") ?? null,
+    eventType: "auth.sign_in"
+  });
 
   await writeAuditLog(context.env.DB, {
     id: crypto.randomUUID(),
@@ -659,13 +827,26 @@ authRoutes.post("/password-reset/confirm", async (context) => {
     session: formatSession({
       id: tokens.sessionId,
       accessToken: tokens.accessToken
-    })
+    }),
+    sessionRisk: {
+      score: resetRisk.score,
+      level: resetRisk.level,
+      reasons: resetRisk.reasons,
+      stepUpRecommended: resetRisk.stepUpRecommended,
+      autoRevokedOtherSessions: resetRisk.autoRevokedOtherSessions,
+      revokedCount: resetRisk.revokedCount
+    }
   });
 });
 
 authRoutes.get("/sessions", requireAuth, async (context) => {
-  const sessions = await listUserSessions(context.env.DB, context.get("authUserId"));
+  const userId = context.get("authUserId");
+  const [sessions, latestRiskRows] = await Promise.all([
+    listUserSessions(context.env.DB, userId),
+    listLatestSessionRiskForUser(context.env.DB, userId)
+  ]);
   const currentSessionId = context.get("authSessionId");
+  const latestRiskBySession = new Map(latestRiskRows.map((row) => [row.session_id, row]));
 
   return context.json({
     sessions: sessions.map((session) => ({
@@ -677,8 +858,150 @@ authRoutes.get("/sessions", requireAuth, async (context) => {
       lastActiveAt: session.last_active_at,
       revokedAt: session.revoked_at,
       isCurrent: session.id === currentSessionId,
-      isActive: !session.revoked_at && !isIsoExpired(session.expires_at)
+      isActive: !session.revoked_at && !isIsoExpired(session.expires_at),
+      risk: (() => {
+        const latest = latestRiskBySession.get(session.id);
+        if (!latest) {
+          return null;
+        }
+        const parsed = parseRiskReason(latest.reason);
+        return {
+          score: latest.risk_score,
+          level: scoreToRiskLevel(latest.risk_score),
+          source: parsed.source,
+          signals: parsed.signals,
+          observedAt: latest.created_at
+        };
+      })()
     }))
+  });
+});
+
+authRoutes.get("/sessions/risk-events", requireAuth, async (context) => {
+  const limitRaw = context.req.query("limit");
+  const parsedLimit = limitRaw ? Number.parseInt(limitRaw, 10) : Number.NaN;
+  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 200) : 100;
+  const events = await listSessionRiskEventsForUser(context.env.DB, {
+    userId: context.get("authUserId"),
+    limit
+  });
+  return context.json({
+    riskEvents: events.map((event) => {
+      const parsed = parseRiskReason(event.reason);
+      return {
+        id: event.id,
+        sessionId: event.session_id,
+        score: event.risk_score,
+        level: scoreToRiskLevel(event.risk_score),
+        source: parsed.source,
+        signals: parsed.signals,
+        ipAddress: event.ip_address,
+        userAgent: event.user_agent,
+        createdAt: event.created_at
+      };
+    })
+  });
+});
+
+authRoutes.get("/api-keys", requireAuth, async (context) => {
+  const keys = await listUserApiKeys(context.env.DB, context.get("authUserId"));
+  return context.json({
+    apiKeys: keys.map((key) => ({
+      id: key.id,
+      name: key.name,
+      keyPrefix: key.key_prefix,
+      scopes: parseScopesJson(key.scopes_json),
+      expiresAt: key.expires_at,
+      lastUsedAt: key.last_used_at,
+      revokedAt: key.revoked_at,
+      createdAt: key.created_at
+    }))
+  });
+});
+
+authRoutes.post("/api-keys", requireAuth, async (context) => {
+  const payload = await readJsonBody(context.req.raw);
+  const parsed = createPersonalApiKeySchema.safeParse(payload);
+  if (!parsed.success) {
+    return context.json(invalidBody(parsed.error.issues), 400);
+  }
+
+  const secret = `pjk_${randomToken(40)}`;
+  const keyHash = await sha256Hex(secret);
+  const keyPrefix = secret.slice(0, 16);
+  const expiresAt = parsed.data.expiresInDays
+    ? addSecondsToIso(parsed.data.expiresInDays * 24 * 60 * 60)
+    : null;
+  const scopes = parsed.data.scopes ?? [];
+
+  const apiKeyId = crypto.randomUUID();
+  await createApiKey(context.env.DB, {
+    id: apiKeyId,
+    ownerType: "user",
+    ownerUserId: context.get("authUserId"),
+    name: parsed.data.name,
+    keyPrefix,
+    keyHash,
+    scopesJson: JSON.stringify(scopes),
+    expiresAt
+  });
+
+  await writeAuditLog(context.env.DB, {
+    id: crypto.randomUUID(),
+    actorType: "user",
+    actorId: context.get("authUserId"),
+    eventType: "auth.api_key_created",
+    metadataJson: JSON.stringify({
+      apiKeyId,
+      name: parsed.data.name,
+      keyPrefix
+    })
+  });
+
+  return context.json(
+    {
+      apiKey: {
+        id: apiKeyId,
+        name: parsed.data.name,
+        keyPrefix,
+        scopes,
+        expiresAt
+      },
+      secret
+    },
+    201
+  );
+});
+
+authRoutes.post("/api-keys/:apiKeyId/revoke", requireAuth, async (context) => {
+  const apiKeyId = context.req.param("apiKeyId");
+  const revoked = await revokeUserApiKey(context.env.DB, {
+    userId: context.get("authUserId"),
+    apiKeyId
+  });
+  if (!revoked) {
+    return context.json(
+      {
+        error: {
+          code: "API_KEY_NOT_FOUND",
+          message: "API key was not found or already revoked"
+        }
+      },
+      404
+    );
+  }
+
+  await writeAuditLog(context.env.DB, {
+    id: crypto.randomUUID(),
+    actorType: "user",
+    actorId: context.get("authUserId"),
+    eventType: "auth.api_key_revoked",
+    metadataJson: JSON.stringify({ apiKeyId })
+  });
+
+  return context.json({
+    ok: true,
+    apiKeyId
   });
 });
 

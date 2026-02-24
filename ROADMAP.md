@@ -20,18 +20,18 @@ Build a Cloudflare-native auth platform that converges toward Clerk-like functio
 - [x] Password reset flow with one-time tokens.
 - [x] Multi-session management endpoints (list/revoke per device).
 - [x] Organizations/teams and memberships.
-- [ ] API keys and service account auth flows.
+- [x] API keys and service account auth flows.
 
 ## Phase 2: Advanced Controls
 - [x] Auth endpoint rate-limiting and abuse protection (D1 fixed-window).
-- [ ] Turnstile challenge for suspicious auth actions.
-- [ ] WebAuthn / passkey support.
-- [ ] Fine-grained RBAC and policy engine.
-- [ ] First-party webhook delivery and retry system.
-- [ ] Session anomaly detection and risk scoring.
+- [x] Turnstile challenge for suspicious auth actions.
+- [x] WebAuthn / passkey support.
+- [x] Fine-grained RBAC and policy engine.
+- [x] First-party webhook delivery and retry system.
+- [x] Session anomaly detection and risk scoring.
 
 ## Phase 3: Productization
-- [ ] Tenant/project model with scoped domains, credentials, and branding.
-- [ ] Hosted sign-in/sign-up UI + embeddable widgets.
-- [ ] Client SDK packages for React/Next.js and server runtimes.
-- [ ] Managed migrations and one-command bootstrap CLI.
+- [x] Tenant/project model with scoped domains, credentials, and branding.
+- [x] Hosted sign-in/sign-up UI + embeddable widgets.
+- [x] Client SDK packages for React/Next.js and server runtimes.
+- [x] Managed migrations and one-command bootstrap CLI.

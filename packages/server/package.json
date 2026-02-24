@@ -1,0 +1,11 @@
+{
+  "name": "@pajamadot/auth-server",
+  "version": "0.1.0",
+  "description": "Server runtime helpers for pj-auth",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "license": "MIT"
+}

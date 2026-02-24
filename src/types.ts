@@ -10,6 +10,9 @@ export type EnvBindings = {
   AUTH_RATE_LIMIT_ENABLED?: string;
   AUTH_RATE_LIMIT_MAX_REQUESTS?: string;
   AUTH_RATE_LIMIT_WINDOW_SECONDS?: string;
+  TURNSTILE_ENABLED?: string;
+  TURNSTILE_SECRET_KEY?: string;
+  TURNSTILE_API_BASE_URL?: string;
   COOKIE_NAME?: string;
   COOKIE_DOMAIN?: string;
   EXPOSE_TEST_TOKENS?: string;

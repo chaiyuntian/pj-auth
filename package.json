@@ -13,7 +13,8 @@
     "evolve:loop": "node tools/capability-evolver/index.mjs --loop --repo . --target src --apply",
     "db:migrate:local": "wrangler d1 migrations apply pj-auth-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply pj-auth-db --remote",
-    "e2e:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/e2e-smoke.ps1"
+    "e2e:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/e2e-smoke.ps1",
+    "bootstrap:cloudflare": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/bootstrap-cloudflare.ps1"
   },
   "keywords": [
     "cloudflare-workers",
