@@ -8,7 +8,6 @@ routes = [
 ]
 
 [vars]
-APP_URL = "http://127.0.0.1:8787"
 ACCESS_TOKEN_TTL_SECONDS = "900"
 REFRESH_TOKEN_TTL_SECONDS = "2592000"
 COOKIE_NAME = "pj_auth_refresh"
