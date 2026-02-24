@@ -13,8 +13,13 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - Personal API keys and organization service accounts with scoped machine keys.
 - Organization webhooks with signed delivery logs and retry endpoint.
 - Passkey (WebAuthn) registration/authentication flow with challenge + assertion verification.
+- TOTP multi-factor authentication with recovery codes and challenge-gated sign-in.
 - Session anomaly detection with risk scoring and automatic high-risk session containment.
 - Multi-tenant project model with scoped auth domains, branding payloads, and project OAuth config.
+- SCIM 2.0 provisioning endpoints with org-scoped bearer tokens.
+- SAML SSO (SP metadata, AuthnRequest start, ACS assertion processing, and domain-based SSO discovery).
+- Enterprise domain routing (`domain -> auth strategy`) with organization-managed routes.
+- Compliance controls: retention policies, retention prune jobs, export jobs, and org KMS key management/encryption.
 - Transactional email delivery via Resend (with safe log fallback).
 - Google OAuth (`/v1/oauth/google/start`, `/v1/oauth/google/callback`).
 - Provider config management via admin API key.
@@ -23,7 +28,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - D1-backed auth rate limiting for `/v1/auth/*` and `/v1/oauth/*`.
 - Demo UI + browser SDK script at `/demo` and `/sdk/pj-auth-client.js`.
 - Hosted auth UI + embeddable widget (`/hosted/sign-in`, `/hosted/sign-up`, `/sdk/pj-auth-widgets.js`).
-- SDK package stubs for browser/react/server runtimes under `packages/`.
+- SDK package stubs for browser/react/nextjs/server runtimes under `packages/`.
 - Built-in capability evolver loop for autonomous safe mutation cycles.
 
 ## Stack
@@ -38,8 +43,12 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `src/routes/admin.ts`: OAuth provider settings + stats.
 - `src/routes/orgs.ts`: organization/team and membership APIs.
 - `src/routes/projects.ts`: tenant/project APIs and scoped OAuth settings.
+- `src/routes/scim.ts`: SCIM 2.0 provisioning endpoints.
+- `src/routes/saml.ts`: SAML public endpoints (discovery, metadata, start, ACS).
+- `src/routes/org-enterprise.ts`: org enterprise APIs (SAML/domain/compliance/KMS/diagnostics).
 - `src/routes/m2m.ts`: API key auth introspection endpoint.
 - `src/routes/passkeys.ts`: WebAuthn passkey registration/authentication APIs.
+- `src/routes/mfa.ts`: TOTP MFA setup/challenge/recovery APIs.
 - `src/routes/hosted.ts`: hosted auth UI and embeddable widget JS.
 - `src/lib/mailer.ts`: outbound email provider integration.
 - `src/lib/session-risk.ts`: risk scoring + anomaly detection.
@@ -55,8 +64,11 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `migrations/0008_policy_engine.sql`: fine-grained organization policies.
 - `migrations/0009_passkeys.sql`: WebAuthn credential/challenge storage.
 - `migrations/0010_projects.sql`: project model + scoped OAuth provider config.
+- `migrations/0011_mfa_totp.sql`: TOTP MFA factors/challenges/recovery codes.
+- `migrations/0012_scim.sql`: SCIM token storage.
+- `migrations/0013_enterprise_saml_compliance.sql`: SAML/domain routes/retention/export jobs/KMS key store.
 - `scripts/bootstrap-cloudflare.ps1`: one-command cloud bootstrap/deploy.
-- `packages/`: browser/react/server SDK package stubs.
+- `packages/`: browser/react/nextjs/server SDK package stubs.
 - `tools/capability-evolver/`: autonomous analyze->mutate->validate->log engine.
 - `ROADMAP.md`: parity plan toward full Clerk-like surface.
 
@@ -64,6 +76,12 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `POST /v1/auth/sign-up`
 - `POST /v1/auth/sign-in`
 - `POST /v1/auth/token/refresh`
+- `GET /v1/auth/mfa/status` (Bearer)
+- `POST /v1/auth/mfa/totp/setup/start` (Bearer)
+- `POST /v1/auth/mfa/totp/setup/confirm` (Bearer)
+- `POST /v1/auth/mfa/recovery-codes/regenerate` (Bearer)
+- `POST /v1/auth/mfa/totp/disable` (Bearer)
+- `POST /v1/auth/mfa/challenge/verify`
 - `POST /v1/auth/email-verification/start` (Bearer)
 - `POST /v1/auth/email-verification/confirm`
 - `GET /v1/auth/email-verification/confirm?token=...`
@@ -105,6 +123,29 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `GET /v1/orgs/:orgId/service-accounts/:serviceAccountId/api-keys` (Bearer)
 - `POST /v1/orgs/:orgId/service-accounts/:serviceAccountId/api-keys` (Bearer)
 - `POST /v1/orgs/:orgId/service-accounts/:serviceAccountId/api-keys/:apiKeyId/revoke` (Bearer)
+- `GET /v1/orgs/:orgId/scim/tokens` (Bearer)
+- `POST /v1/orgs/:orgId/scim/tokens` (Bearer)
+- `POST /v1/orgs/:orgId/scim/tokens/:tokenId/revoke` (Bearer)
+- `GET /v1/orgs/:orgId/saml/connections` (Bearer)
+- `POST /v1/orgs/:orgId/saml/connections` (Bearer)
+- `PATCH /v1/orgs/:orgId/saml/connections/:connectionId` (Bearer)
+- `POST /v1/orgs/:orgId/saml/connections/:connectionId/disable` (Bearer)
+- `GET /v1/orgs/:orgId/domain-routes` (Bearer)
+- `POST /v1/orgs/:orgId/domain-routes` (Bearer)
+- `DELETE /v1/orgs/:orgId/domain-routes/:routeId` (Bearer)
+- `GET /v1/orgs/:orgId/enterprise/diagnostics` (Bearer)
+- `GET /v1/orgs/:orgId/compliance/retention` (Bearer)
+- `PUT /v1/orgs/:orgId/compliance/retention` (Bearer)
+- `POST /v1/orgs/:orgId/compliance/prune` (Bearer)
+- `GET /v1/orgs/:orgId/compliance/exports` (Bearer)
+- `POST /v1/orgs/:orgId/compliance/exports` (Bearer)
+- `GET /v1/orgs/:orgId/compliance/exports/:jobId` (Bearer)
+- `GET /v1/orgs/:orgId/kms/keys` (Bearer)
+- `POST /v1/orgs/:orgId/kms/keys` (Bearer)
+- `POST /v1/orgs/:orgId/kms/keys/:keyId/rotate` (Bearer)
+- `POST /v1/orgs/:orgId/kms/keys/:keyId/disable` (Bearer)
+- `POST /v1/orgs/:orgId/kms/keys/:keyId/encrypt` (Bearer)
+- `POST /v1/orgs/:orgId/kms/keys/:keyId/decrypt` (Bearer)
 - `GET /v1/orgs/:orgId/webhooks` (Bearer)
 - `POST /v1/orgs/:orgId/webhooks` (Bearer)
 - `PATCH /v1/orgs/:orgId/webhooks/:webhookId` (Bearer)
@@ -114,6 +155,16 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `POST /v1/orgs/:orgId/policies` (Bearer)
 - `DELETE /v1/orgs/:orgId/policies/:policyId` (Bearer)
 - `GET /v1/m2m/me` (`x-api-key` or Bearer API key)
+- `GET /v1/scim/v2/ServiceProviderConfig` (`Authorization: Bearer sct_...`)
+- `GET /v1/scim/v2/Users` (`Authorization: Bearer sct_...`)
+- `POST /v1/scim/v2/Users` (`Authorization: Bearer sct_...`)
+- `GET /v1/scim/v2/Users/:userId` (`Authorization: Bearer sct_...`)
+- `PATCH /v1/scim/v2/Users/:userId` (`Authorization: Bearer sct_...`)
+- `DELETE /v1/scim/v2/Users/:userId` (`Authorization: Bearer sct_...`)
+- `GET /v1/saml/discover?email=...`
+- `GET /v1/saml/:connectionSlug/metadata`
+- `GET /v1/saml/:connectionSlug/start`
+- `POST /v1/saml/:connectionSlug/acs`
 - `GET /v1/projects` (Bearer)
 - `POST /v1/projects` (Bearer)
 - `GET /v1/projects/:projectId` (Bearer)
@@ -124,6 +175,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `GET /v1/admin/stats` (`x-admin-api-key`)
 - `GET /v1/admin/system/status` (`x-admin-api-key`)
 - `POST /v1/admin/webhooks/retry` (`x-admin-api-key`)
+- `GET /v1/admin/audit-logs` (`x-admin-api-key`)
 - `GET /hosted/sign-in` (Hosted UI)
 - `GET /hosted/sign-up` (Hosted UI)
 - `GET /sdk/pj-auth-widgets.js` (Embeddable widget)
@@ -155,6 +207,7 @@ Manual path:
 3. Set `database_id` in `wrangler.toml` from the command output.
 4. Set required secrets:
    - `npx wrangler secret put JWT_SIGNING_KEY`
+   - `npx wrangler secret put KMS_MASTER_KEY` (optional, otherwise JWT secret is used as KMS master)
    - `npx wrangler secret put ADMIN_API_KEY`
    - `npx wrangler secret put RESEND_API_KEY` (optional, enables real email delivery)
    - `npx wrangler secret put TURNSTILE_SECRET_KEY` (optional unless `TURNSTILE_ENABLED=true`)
@@ -242,5 +295,9 @@ curl -X POST https://users.pajamadot.com/v1/auth/sign-up \
 - Enable rate-limiting / bot protection on auth endpoints before heavy traffic.
 - Keep at least one `owner` per organization; role downgrade/removal of last owner is blocked.
 - If `TURNSTILE_ENABLED=true`, clients must pass `turnstileToken` on `sign-up`, `sign-in`, and `password-reset/start`.
+- Treat SCIM bearer tokens (`sct_...`) as high-privilege secrets and rotate/revoke them periodically.
+- Enforce MFA enrollment for privileged users and monitor `auth.mfa_*` audit events.
 - For passkeys, always use HTTPS/custom domain in production and monitor `auth.session_risk_detected` audit events.
 - Use organization policy `deny` rules carefully; they override both base role grants and `allow` policies.
+- Rotate SAML IdP certificates proactively and keep `requireSignedAssertions=true` for production connections.
+- Treat org KMS keys as sensitive cryptographic material; rotate aliases regularly and keep `KMS_MASTER_KEY` separate from `JWT_SIGNING_KEY`.

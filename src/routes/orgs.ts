@@ -9,6 +9,7 @@ import {
   createApiKey,
   createOrganizationWithOwner,
   createServiceAccount,
+  createScimToken,
   createWebhookEndpoint,
   createTeam,
   disableServiceAccount,
@@ -26,12 +27,14 @@ import {
   listOrganizationsForUser,
   listServiceAccountApiKeys,
   listServiceAccountsForOrganization,
+  listScimTokensForOrganization,
   listTeamMembers,
   listTeamsForUserInOrganization,
   listWebhookDeliveriesForEndpoint,
   listWebhookEndpointsForOrganization,
   removeOrganizationMembership,
   removeOrganizationPolicy,
+  revokeScimToken,
   revokeServiceAccountApiKey,
   removeTeamMembership,
   type OrganizationMembershipRow,
@@ -103,6 +106,10 @@ const createServiceAccountApiKeySchema = z.object({
   name: z.string().min(2).max(120),
   scopes: z.array(z.string().min(1).max(120)).max(50).optional(),
   expiresInDays: z.number().int().positive().max(3650).optional()
+});
+
+const createScimTokenSchema = z.object({
+  name: z.string().min(2).max(120)
 });
 
 const webhookEventNameSchema = z.string().min(2).max(120);
@@ -1333,6 +1340,232 @@ orgRoutes.post("/:orgId/service-accounts/:serviceAccountId/api-keys/:apiKeyId/re
   return context.json({
     ok: true,
     apiKeyId
+  });
+});
+
+orgRoutes.get("/:orgId/scim/tokens", async (context) => {
+  const organizationId = context.req.param("orgId");
+  const access = await loadOrganizationAccess({
+    db: context.env.DB,
+    organizationId,
+    userId: context.get("authUserId")
+  });
+  if (!access) {
+    return context.json(
+      {
+        error: {
+          code: "ORGANIZATION_NOT_FOUND_OR_FORBIDDEN",
+          message: "Organization does not exist or you do not have access"
+        }
+      },
+      404
+    );
+  }
+  if (
+    !(await hasOrganizationPermission({
+      db: context.env.DB,
+      organizationId,
+      membership: access.membership,
+      resource: "scim",
+      action: "manage"
+    }))
+  ) {
+    return context.json(
+      {
+        error: {
+          code: "FORBIDDEN",
+          message: "Only organization owners/admins can manage SCIM tokens"
+        }
+      },
+      403
+    );
+  }
+
+  const tokens = await listScimTokensForOrganization(context.env.DB, organizationId);
+  return context.json({
+    organization: formatOrganization(access.organization),
+    tokens: tokens.map((token) => ({
+      id: token.id,
+      name: token.name,
+      tokenPrefix: token.token_prefix,
+      lastUsedAt: token.last_used_at,
+      revokedAt: token.revoked_at,
+      createdByUserId: token.created_by_user_id,
+      createdAt: token.created_at,
+      updatedAt: token.updated_at
+    }))
+  });
+});
+
+orgRoutes.post("/:orgId/scim/tokens", async (context) => {
+  const organizationId = context.req.param("orgId");
+  const currentUserId = context.get("authUserId");
+  const access = await loadOrganizationAccess({
+    db: context.env.DB,
+    organizationId,
+    userId: currentUserId
+  });
+  if (!access) {
+    return context.json(
+      {
+        error: {
+          code: "ORGANIZATION_NOT_FOUND_OR_FORBIDDEN",
+          message: "Organization does not exist or you do not have access"
+        }
+      },
+      404
+    );
+  }
+  if (
+    !(await hasOrganizationPermission({
+      db: context.env.DB,
+      organizationId,
+      membership: access.membership,
+      resource: "scim",
+      action: "manage"
+    }))
+  ) {
+    return context.json(
+      {
+        error: {
+          code: "FORBIDDEN",
+          message: "Only organization owners/admins can manage SCIM tokens"
+        }
+      },
+      403
+    );
+  }
+
+  const payload = await readJsonBody(context.req.raw);
+  const parsed = createScimTokenSchema.safeParse(payload);
+  if (!parsed.success) {
+    return context.json(invalidBody(parsed.error.issues), 400);
+  }
+
+  const secret = `sct_${randomToken(40)}`;
+  const tokenHash = await sha256Hex(secret);
+  const tokenPrefix = secret.slice(0, 16);
+  const tokenId = crypto.randomUUID();
+  await createScimToken(context.env.DB, {
+    id: tokenId,
+    organizationId,
+    name: parsed.data.name.trim(),
+    tokenPrefix,
+    tokenHash,
+    createdByUserId: currentUserId
+  });
+  await writeAuditLog(context.env.DB, {
+    id: crypto.randomUUID(),
+    actorType: "user",
+    actorId: currentUserId,
+    eventType: "org.scim_token_created",
+    metadataJson: JSON.stringify({
+      organizationId,
+      tokenId
+    })
+  });
+  await emitOrgWebhookSafely({
+    env: context.env,
+    organizationId,
+    eventType: "org.scim_token.created",
+    payload: {
+      tokenId,
+      createdByUserId: currentUserId
+    }
+  });
+
+  return context.json(
+    {
+      token: {
+        id: tokenId,
+        name: parsed.data.name.trim(),
+        tokenPrefix
+      },
+      secret
+    },
+    201
+  );
+});
+
+orgRoutes.post("/:orgId/scim/tokens/:tokenId/revoke", async (context) => {
+  const organizationId = context.req.param("orgId");
+  const tokenId = context.req.param("tokenId");
+  const currentUserId = context.get("authUserId");
+  const access = await loadOrganizationAccess({
+    db: context.env.DB,
+    organizationId,
+    userId: currentUserId
+  });
+  if (!access) {
+    return context.json(
+      {
+        error: {
+          code: "ORGANIZATION_NOT_FOUND_OR_FORBIDDEN",
+          message: "Organization does not exist or you do not have access"
+        }
+      },
+      404
+    );
+  }
+  if (
+    !(await hasOrganizationPermission({
+      db: context.env.DB,
+      organizationId,
+      membership: access.membership,
+      resource: "scim",
+      action: "manage"
+    }))
+  ) {
+    return context.json(
+      {
+        error: {
+          code: "FORBIDDEN",
+          message: "Only organization owners/admins can manage SCIM tokens"
+        }
+      },
+      403
+    );
+  }
+
+  const revoked = await revokeScimToken(context.env.DB, {
+    organizationId,
+    tokenId
+  });
+  if (!revoked) {
+    return context.json(
+      {
+        error: {
+          code: "SCIM_TOKEN_NOT_FOUND",
+          message: "SCIM token was not found or already revoked"
+        }
+      },
+      404
+    );
+  }
+
+  await writeAuditLog(context.env.DB, {
+    id: crypto.randomUUID(),
+    actorType: "user",
+    actorId: currentUserId,
+    eventType: "org.scim_token_revoked",
+    metadataJson: JSON.stringify({
+      organizationId,
+      tokenId
+    })
+  });
+  await emitOrgWebhookSafely({
+    env: context.env,
+    organizationId,
+    eventType: "org.scim_token.revoked",
+    payload: {
+      tokenId,
+      revokedByUserId: currentUserId
+    }
+  });
+
+  return context.json({
+    ok: true,
+    tokenId
   });
 });
 

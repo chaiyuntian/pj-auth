@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { EnvBindings } from "../types";
-import { getGoogleProviderConfig, upsertGoogleProvider, writeAuditLog } from "../lib/db";
+import { getGoogleProviderConfig, listAuditLogs, upsertGoogleProvider, writeAuditLog } from "../lib/db";
 import { requireAdminApiKey } from "../middleware/require-admin";
 import { readJsonBody } from "../lib/request";
 import { getCorsOrigins, getEmailFromAddress, getTurnstileSettings } from "../lib/config";
@@ -110,13 +110,45 @@ adminRoutes.get("/stats", async (context) => {
     .prepare("SELECT COUNT(*) as count FROM passkey_credentials WHERE revoked_at IS NULL")
     .first<{ count: number }>()
     .catch(() => ({ count: 0 }));
+  const mfaTotp = await context.env.DB
+    .prepare(
+      "SELECT COUNT(*) as count FROM mfa_totp_factors WHERE verified_at IS NOT NULL AND disabled_at IS NULL"
+    )
+    .first<{ count: number }>()
+    .catch(() => ({ count: 0 }));
+  const samlConnections = await context.env.DB
+    .prepare("SELECT COUNT(*) as count FROM saml_connections WHERE is_active = 1")
+    .first<{ count: number }>()
+    .catch(() => ({ count: 0 }));
+  const domainRoutes = await context.env.DB
+    .prepare("SELECT COUNT(*) as count FROM domain_routes")
+    .first<{ count: number }>()
+    .catch(() => ({ count: 0 }));
+  const retentionPolicies = await context.env.DB
+    .prepare("SELECT COUNT(*) as count FROM retention_policies")
+    .first<{ count: number }>()
+    .catch(() => ({ count: 0 }));
+  const exportJobs = await context.env.DB
+    .prepare("SELECT COUNT(*) as count FROM export_jobs")
+    .first<{ count: number }>()
+    .catch(() => ({ count: 0 }));
+  const kmsKeys = await context.env.DB
+    .prepare("SELECT COUNT(*) as count FROM organization_kms_keys WHERE is_active = 1")
+    .first<{ count: number }>()
+    .catch(() => ({ count: 0 }));
   return context.json({
     users: users?.count ?? 0,
     activeSessions: sessions?.count ?? 0,
     organizations: organizations?.count ?? 0,
     teams: teams?.count ?? 0,
     projects: projects?.count ?? 0,
-    activePasskeys: passkeys?.count ?? 0
+    activePasskeys: passkeys?.count ?? 0,
+    mfaTotpEnabledUsers: mfaTotp?.count ?? 0,
+    activeSamlConnections: samlConnections?.count ?? 0,
+    domainRoutes: domainRoutes?.count ?? 0,
+    retentionPolicies: retentionPolicies?.count ?? 0,
+    exportJobs: exportJobs?.count ?? 0,
+    activeKmsKeys: kmsKeys?.count ?? 0
   });
 });
 
@@ -167,5 +199,41 @@ adminRoutes.post("/webhooks/retry", async (context) => {
   return context.json({
     ok: true,
     processed: result.processed
+  });
+});
+
+adminRoutes.get("/audit-logs", async (context) => {
+  const limitRaw = context.req.query("limit");
+  const parsedLimit = limitRaw ? Number.parseInt(limitRaw, 10) : Number.NaN;
+  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
+  const actorType = context.req.query("actorType")?.trim();
+  const eventType = context.req.query("eventType")?.trim();
+
+  const logs = await listAuditLogs(context.env.DB, {
+    limit,
+    actorType: actorType || undefined,
+    eventType: eventType || undefined
+  });
+
+  return context.json({
+    logs: logs.map((log) => ({
+      id: log.id,
+      actorType: log.actor_type,
+      actorId: log.actor_id,
+      eventType: log.event_type,
+      metadata: (() => {
+        if (!log.metadata_json) {
+          return null;
+        }
+        try {
+          return JSON.parse(log.metadata_json);
+        } catch {
+          return {
+            raw: log.metadata_json
+          };
+        }
+      })(),
+      createdAt: log.created_at
+    }))
   });
 });

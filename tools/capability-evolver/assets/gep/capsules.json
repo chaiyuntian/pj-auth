@@ -2,6 +2,84 @@
   "version": 1,
   "capsules": [
     {
+      "id": "run-e2e-smoke-6bba1cd389f7",
+      "geneId": "run-e2e-smoke",
+      "target": "src",
+      "summary": "Successful run-e2e-smoke cycle",
+      "createdAt": "2026-02-24T16:03:02.734Z",
+      "validations": [
+        {
+          "command": "npm run e2e:smoke",
+          "code": 0
+        }
+      ]
+    },
+    {
+      "id": "run-e2e-smoke-a8a4851b8827",
+      "geneId": "run-e2e-smoke",
+      "target": "src",
+      "summary": "Successful run-e2e-smoke cycle",
+      "createdAt": "2026-02-24T16:02:38.164Z",
+      "validations": [
+        {
+          "command": "npm run e2e:smoke",
+          "code": 0
+        }
+      ]
+    },
+    {
+      "id": "run-e2e-smoke-6c9ec54c4ee0",
+      "geneId": "run-e2e-smoke",
+      "target": "src",
+      "summary": "Successful run-e2e-smoke cycle",
+      "createdAt": "2026-02-24T15:33:01.701Z",
+      "validations": [
+        {
+          "command": "npm run e2e:smoke",
+          "code": 0
+        }
+      ]
+    },
+    {
+      "id": "run-e2e-smoke-cf03aba840c8",
+      "geneId": "run-e2e-smoke",
+      "target": "src",
+      "summary": "Successful run-e2e-smoke cycle",
+      "createdAt": "2026-02-24T15:32:45.572Z",
+      "validations": [
+        {
+          "command": "npm run e2e:smoke",
+          "code": 0
+        }
+      ]
+    },
+    {
+      "id": "run-e2e-smoke-298f01fc7ac4",
+      "geneId": "run-e2e-smoke",
+      "target": "src",
+      "summary": "Successful run-e2e-smoke cycle",
+      "createdAt": "2026-02-24T15:30:12.837Z",
+      "validations": [
+        {
+          "command": "npm run e2e:smoke",
+          "code": 0
+        }
+      ]
+    },
+    {
+      "id": "run-e2e-smoke-afa731f60d90",
+      "geneId": "run-e2e-smoke",
+      "target": "src",
+      "summary": "Successful run-e2e-smoke cycle",
+      "createdAt": "2026-02-24T15:29:54.747Z",
+      "validations": [
+        {
+          "command": "npm run e2e:smoke",
+          "code": 0
+        }
+      ]
+    },
+    {
       "id": "run-e2e-smoke-aaa8562b40ef",
       "geneId": "run-e2e-smoke",
       "target": "src",

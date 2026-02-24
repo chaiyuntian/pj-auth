@@ -29,7 +29,20 @@ const adminPermissions = new Set<string>([
   "service_accounts:read",
   "service_accounts:manage",
   "webhooks:read",
-  "webhooks:manage"
+  "webhooks:manage",
+  "policies:read",
+  "policies:manage",
+  "scim:read",
+  "scim:manage",
+  "saml:read",
+  "saml:manage",
+  "domains:read",
+  "domains:manage",
+  "compliance:read",
+  "compliance:manage",
+  "kms:read",
+  "kms:manage",
+  "enterprise:read"
 ]);
 const memberPermissions = new Set<string>(["org:read", "members:read", "teams:read"]);
 

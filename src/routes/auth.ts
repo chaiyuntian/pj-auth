@@ -45,6 +45,7 @@ import { randomToken } from "../lib/encoding";
 import { sendTransactionalEmail } from "../lib/mailer";
 import { assertTurnstileIfEnabled } from "../lib/turnstile";
 import { assessAndRecordSessionRisk } from "../lib/session-risk";
+import { issueSignInMfaChallengeIfNeeded } from "../lib/mfa-auth";
 
 const VERIFICATION_PURPOSE_EMAIL = "email_verify";
 const VERIFICATION_PURPOSE_PASSWORD_RESET = "password_reset";
@@ -422,6 +423,24 @@ authRoutes.post("/sign-in", async (context) => {
     );
   }
 
+  const mfaChallenge = await issueSignInMfaChallengeIfNeeded({
+    db: context.env.DB,
+    userId: user.id,
+    primaryMethod: "password",
+    ipAddress: readRequestIp(context.req.raw),
+    userAgent: context.req.header("user-agent") ?? null
+  });
+  if (mfaChallenge.required) {
+    return context.json({
+      mfaRequired: true,
+      challengeId: mfaChallenge.challengeId,
+      expiresAt: mfaChallenge.expiresAt,
+      methods: mfaChallenge.methods,
+      primaryMethod: mfaChallenge.primaryMethod,
+      user: publicUser(user)
+    });
+  }
+
   const tokens = await createSessionAndTokens(context.env, {
     userId: user.id,
     userAgent: context.req.header("user-agent"),
@@ -797,6 +816,34 @@ authRoutes.post("/password-reset/confirm", async (context) => {
   await revokeAllUserSessions(context.env.DB, {
     userId: user.id
   });
+
+  const mfaChallenge = await issueSignInMfaChallengeIfNeeded({
+    db: context.env.DB,
+    userId: user.id,
+    primaryMethod: "password",
+    ipAddress: readRequestIp(context.req.raw),
+    userAgent: context.req.header("user-agent") ?? null
+  });
+  if (mfaChallenge.required) {
+    await writeAuditLog(context.env.DB, {
+      id: crypto.randomUUID(),
+      actorType: "user",
+      actorId: user.id,
+      eventType: "auth.password_reset_completed_requires_mfa",
+      metadataJson: JSON.stringify({
+        challengeId: mfaChallenge.challengeId
+      })
+    });
+    return context.json({
+      ok: true,
+      mfaRequired: true,
+      challengeId: mfaChallenge.challengeId,
+      expiresAt: mfaChallenge.expiresAt,
+      methods: mfaChallenge.methods,
+      primaryMethod: mfaChallenge.primaryMethod,
+      user: publicUser(user)
+    });
+  }
 
   const tokens = await createSessionAndTokens(context.env, {
     userId: user.id,

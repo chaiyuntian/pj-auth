@@ -8,8 +8,12 @@ import { demoRoutes } from "./routes/demo";
 import { orgRoutes } from "./routes/orgs";
 import { m2mRoutes } from "./routes/m2m";
 import { passkeyRoutes } from "./routes/passkeys";
+import { mfaRoutes } from "./routes/mfa";
 import { hostedRoutes } from "./routes/hosted";
 import { projectRoutes } from "./routes/projects";
+import { scimRoutes } from "./routes/scim";
+import { orgEnterpriseRoutes } from "./routes/org-enterprise";
+import { samlRoutes } from "./routes/saml";
 import { applyApiCors } from "./middleware/cors";
 import { createAuthRateLimitMiddleware } from "./middleware/rate-limit";
 
@@ -29,6 +33,8 @@ app.use("/v1/auth/*", authRateLimit);
 app.use("/v1/oauth/*", authRateLimit);
 app.use("/v1/orgs/*", authRateLimit);
 app.use("/v1/projects/*", authRateLimit);
+app.use("/v1/scim/*", authRateLimit);
+app.use("/v1/saml/*", authRateLimit);
 
 app.use("*", async (context, next) => {
   await next();
@@ -77,12 +83,16 @@ app.get("/healthz", async (context) => {
 });
 
 app.route("/v1/auth", authRoutes);
+app.route("/v1/auth/mfa", mfaRoutes);
 app.route("/v1/oauth", oauthRoutes);
 app.route("/v1/orgs", orgRoutes);
+app.route("/v1/orgs", orgEnterpriseRoutes);
 app.route("/v1/projects", projectRoutes);
 app.route("/v1/m2m", m2mRoutes);
 app.route("/v1/auth/passkeys", passkeyRoutes);
 app.route("/v1/admin", adminRoutes);
+app.route("/v1/scim", scimRoutes);
+app.route("/v1/saml", samlRoutes);
 app.route("/", demoRoutes);
 app.route("/", hostedRoutes);
 

@@ -8,6 +8,56 @@ $stamp = Get-Date -Format "yyyyMMddHHmmss"
 $email = "smoke-$stamp@pajamadot.com"
 $email2 = "smoke-member-$stamp@pajamadot.com"
 
+function Get-TotpCode {
+  param([string]$SecretBase32)
+
+  $alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+  $normalized = ($SecretBase32.ToUpper() -replace "[^A-Z2-7]", "")
+  $bitBuffer = [int64]0
+  $bitCount = 0
+  $secretBytes = New-Object System.Collections.Generic.List[byte]
+  foreach ($ch in $normalized.ToCharArray()) {
+    $idx = $alphabet.IndexOf($ch)
+    if ($idx -lt 0) { continue }
+    $bitBuffer = (($bitBuffer -shl 5) -bor $idx)
+    $bitCount += 5
+    while ($bitCount -ge 8) {
+      $shift = $bitCount - 8
+      $byteValue = ($bitBuffer -shr $shift) -band 0xFF
+      $secretBytes.Add([byte]$byteValue)
+      $bitCount -= 8
+      if ($bitCount -gt 0) {
+        $mask = ([int64]1 -shl $bitCount) - 1
+        $bitBuffer = $bitBuffer -band $mask
+      } else {
+        $bitBuffer = 0
+      }
+    }
+  }
+
+  $counter = [int64]([System.DateTimeOffset]::UtcNow.ToUnixTimeSeconds() / 30)
+  $counterBytes = New-Object byte[] 8
+  for ($i = 7; $i -ge 0; $i--) {
+    $counterBytes[$i] = [byte]($counter -band 0xFF)
+    $counter = [int64]([math]::Floor($counter / 256))
+  }
+
+  $hmac = New-Object System.Security.Cryptography.HMACSHA1(,$secretBytes.ToArray())
+  try {
+    $hash = $hmac.ComputeHash($counterBytes)
+  } finally {
+    $hmac.Dispose()
+  }
+
+  $offset = $hash[$hash.Length - 1] -band 0x0F
+  $binary = (([int]($hash[$offset] -band 0x7F)) -shl 24) `
+    -bor (([int]($hash[$offset + 1] -band 0xFF)) -shl 16) `
+    -bor (([int]($hash[$offset + 2] -band 0xFF)) -shl 8) `
+    -bor ([int]($hash[$offset + 3] -band 0xFF))
+  $otp = $binary % 1000000
+  return $otp.ToString("D6")
+}
+
 Write-Host "Running health check against $BaseUrl"
 $health = Invoke-RestMethod -Method Get -Uri "$BaseUrl/healthz"
 if (-not $health.ok) {
@@ -48,6 +98,62 @@ $sessions = Invoke-RestMethod -Method Get -Uri "$BaseUrl/v1/auth/sessions" -Head
 if (-not $sessions.sessions -or $sessions.sessions.Count -lt 1) {
   throw "No active sessions returned"
 }
+
+Write-Host "Starting MFA TOTP setup"
+$mfaSetup = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/auth/mfa/totp/setup/start" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body "{}"
+if (-not $mfaSetup.factorId -or -not $mfaSetup.secretBase32) {
+  throw "MFA setup start failed"
+}
+
+Write-Host "Confirming MFA TOTP setup"
+$mfaCode = Get-TotpCode -SecretBase32 $mfaSetup.secretBase32
+$mfaConfirm = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/auth/mfa/totp/setup/confirm" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body (@{
+  factorId = $mfaSetup.factorId
+  code = $mfaCode
+} | ConvertTo-Json -Compress)
+if (-not $mfaConfirm.mfa.enabled -or -not $mfaConfirm.recoveryCodes -or $mfaConfirm.recoveryCodes.Count -lt 1) {
+  throw "MFA setup confirm failed"
+}
+$recoveryCode = $mfaConfirm.recoveryCodes[0]
+
+Write-Host "Signing in with password to trigger MFA challenge"
+$mfaSignInStart = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/auth/sign-in" -ContentType "application/json" -Body (@{
+  email = $email
+  password = $Password
+} | ConvertTo-Json -Compress)
+if (-not $mfaSignInStart.mfaRequired -or -not $mfaSignInStart.challengeId) {
+  throw "Expected mfaRequired challenge from sign-in"
+}
+
+Write-Host "Completing MFA challenge with TOTP"
+$mfaChallengeCode = Get-TotpCode -SecretBase32 $mfaSetup.secretBase32
+$mfaSignInFinish = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/auth/mfa/challenge/verify" -ContentType "application/json" -Body (@{
+  challengeId = $mfaSignInStart.challengeId
+  method = "totp"
+  code = $mfaChallengeCode
+} | ConvertTo-Json -Compress)
+if (-not $mfaSignInFinish.session.accessToken) {
+  throw "MFA challenge verify failed for TOTP"
+}
+$token = $mfaSignInFinish.session.accessToken
+
+Write-Host "Validating recovery code MFA path"
+$mfaSignInStartRecovery = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/auth/sign-in" -ContentType "application/json" -Body (@{
+  email = $email
+  password = $Password
+} | ConvertTo-Json -Compress)
+if (-not $mfaSignInStartRecovery.mfaRequired -or -not $mfaSignInStartRecovery.challengeId) {
+  throw "Expected second mfaRequired challenge from sign-in"
+}
+$mfaRecoveryFinish = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/auth/mfa/challenge/verify" -ContentType "application/json" -Body (@{
+  challengeId = $mfaSignInStartRecovery.challengeId
+  method = "recovery_code"
+  code = $recoveryCode
+} | ConvertTo-Json -Compress)
+if (-not $mfaRecoveryFinish.session.accessToken) {
+  throw "MFA challenge verify failed for recovery code"
+}
+$token = $mfaRecoveryFinish.session.accessToken
 
 Write-Host "Reading session risk events"
 $riskEvents = Invoke-RestMethod -Method Get -Uri "$BaseUrl/v1/auth/sessions/risk-events" -Headers @{ Authorization = "Bearer $token" }
@@ -93,6 +199,32 @@ $addMember = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/orgs/$orgId/member
 } | ConvertTo-Json -Compress)
 if ($addMember.user.email -ne $email2) {
   throw "Second user was not added to organization"
+}
+
+Write-Host "Creating SCIM token"
+$scimToken = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/orgs/$orgId/scim/tokens" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body (@{
+  name = "Smoke SCIM Token $stamp"
+} | ConvertTo-Json -Compress)
+if (-not $scimToken.secret) {
+  throw "SCIM token secret not returned"
+}
+$scimSecret = $scimToken.secret
+
+Write-Host "Checking SCIM service provider config"
+$scimConfig = Invoke-RestMethod -Method Get -Uri "$BaseUrl/v1/scim/v2/ServiceProviderConfig" -Headers @{ Authorization = "Bearer $scimSecret" }
+if (-not $scimConfig.patch.supported) {
+  throw "SCIM service provider config invalid"
+}
+
+Write-Host "Provisioning SCIM user"
+$scimUserEmail = "scim-$stamp@pajamadot.com"
+$scimUser = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/scim/v2/Users" -Headers @{ Authorization = "Bearer $scimSecret" } -ContentType "application/json" -Body (@{
+  userName = $scimUserEmail
+  displayName = "SCIM Smoke User"
+  active = $true
+} | ConvertTo-Json -Compress)
+if ($scimUser.userName -ne $scimUserEmail) {
+  throw "SCIM user provisioning failed"
 }
 
 Write-Host "Creating organization webhook endpoint"
@@ -143,8 +275,8 @@ if (-not $deliveries.deliveries -or $deliveries.deliveries.Count -lt 1) {
 
 Write-Host "Verifying organization members"
 $orgMembers = Invoke-RestMethod -Method Get -Uri "$BaseUrl/v1/orgs/$orgId/members" -Headers @{ Authorization = "Bearer $token" }
-if (-not $orgMembers.members -or $orgMembers.members.Count -lt 2) {
-  throw "Expected at least two organization members"
+if (-not $orgMembers.members -or $orgMembers.members.Count -lt 3) {
+  throw "Expected at least three organization members after SCIM provisioning"
 }
 
 Write-Host "Creating team"
@@ -236,6 +368,172 @@ $projectGoogle = Invoke-RestMethod -Method Put -Uri "$BaseUrl/v1/projects/$proje
 } | ConvertTo-Json -Compress)
 if (-not $projectGoogle.enabled) {
   throw "Project scoped Google provider update failed"
+}
+
+Write-Host "Creating SAML connection"
+$samlCertBody = "MIICSMOKETESTCERT$stamp"
+$samlCertPem = "-----BEGIN CERTIFICATE-----`n$samlCertBody`n-----END CERTIFICATE-----"
+$samlConnectionCreate = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/orgs/$orgId/saml/connections" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body (@{
+  name = "Smoke SAML $stamp"
+  slug = "smoke-saml-$stamp"
+  idpEntityId = "https://idp.smoke.$stamp.example.com/metadata"
+  ssoUrl = "https://idp.smoke.$stamp.example.com/sso"
+  x509CertPem = $samlCertPem
+  requireSignedAssertions = $true
+  allowIdpInitiated = $true
+} | ConvertTo-Json -Compress)
+$samlConnection = $samlConnectionCreate.connection
+if (-not $samlConnection.id -or -not $samlConnection.slug) {
+  throw "SAML connection creation failed"
+}
+
+Write-Host "Listing SAML connections"
+$samlConnections = Invoke-RestMethod -Method Get -Uri "$BaseUrl/v1/orgs/$orgId/saml/connections" -Headers @{ Authorization = "Bearer $token" }
+if (-not $samlConnections.connections -or $samlConnections.connections.Count -lt 1) {
+  throw "No SAML connections returned"
+}
+
+$samlDomain = "corp-$stamp.pajamadot.com"
+Write-Host "Creating domain route for SAML"
+$domainRoute = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/orgs/$orgId/domain-routes" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body (@{
+  domain = $samlDomain
+  connectionType = "saml"
+  connectionId = $samlConnection.id
+} | ConvertTo-Json -Compress)
+if (-not $domainRoute.route.id) {
+  throw "Domain route creation failed"
+}
+
+Write-Host "Discovering SSO strategy by email domain"
+$discovery = Invoke-RestMethod -Method Get -Uri "$BaseUrl/v1/saml/discover?email=saml-user@$samlDomain"
+if ($discovery.strategy -ne "saml") {
+  throw "Expected SAML strategy for routed domain"
+}
+
+Write-Host "Fetching SAML metadata"
+$metadataResponse = Invoke-WebRequest -Method Get -Uri "$BaseUrl/v1/saml/$($samlConnection.slug)/metadata"
+if ($metadataResponse.StatusCode -ne 200 -or -not ($metadataResponse.Content -match "EntityDescriptor")) {
+  throw "SAML metadata endpoint failed"
+}
+
+Write-Host "Starting SAML flow"
+$samlStart = Invoke-RestMethod -Method Get -Uri "$BaseUrl/v1/saml/$($samlConnection.slug)/start?mode=json"
+if (-not $samlStart.relayState) {
+  throw "SAML start did not return relay state"
+}
+
+$samlUserEmail = "saml-$stamp@$samlDomain"
+$notBefore = (Get-Date).ToUniversalTime().AddMinutes(-2).ToString("yyyy-MM-ddTHH:mm:ssZ")
+$notOnOrAfter = (Get-Date).ToUniversalTime().AddMinutes(5).ToString("yyyy-MM-ddTHH:mm:ssZ")
+$samlResponseXml = @"
+<?xml version=""1.0"" encoding=""UTF-8""?>
+<samlp:Response xmlns:samlp=""urn:oasis:names:tc:SAML:2.0:protocol"" xmlns:saml=""urn:oasis:names:tc:SAML:2.0:assertion"" xmlns:ds=""http://www.w3.org/2000/09/xmldsig#"" Destination=""$($samlConnection.acsUrl)"" InResponseTo=""$($samlStart.relayState)"">
+  <saml:Issuer>$($samlConnection.idpEntityId)</saml:Issuer>
+  <ds:Signature>
+    <ds:KeyInfo>
+      <ds:X509Data>
+        <ds:X509Certificate>$samlCertBody</ds:X509Certificate>
+      </ds:X509Data>
+    </ds:KeyInfo>
+  </ds:Signature>
+  <saml:Assertion>
+    <saml:Issuer>$($samlConnection.idpEntityId)</saml:Issuer>
+    <saml:Subject>
+      <saml:NameID>$samlUserEmail</saml:NameID>
+      <saml:SubjectConfirmation>
+        <saml:SubjectConfirmationData InResponseTo=""$($samlStart.relayState)"" NotOnOrAfter=""$notOnOrAfter"" Recipient=""$($samlConnection.acsUrl)"" />
+      </saml:SubjectConfirmation>
+    </saml:Subject>
+    <saml:Conditions NotBefore=""$notBefore"" NotOnOrAfter=""$notOnOrAfter"">
+      <saml:AudienceRestriction>
+        <saml:Audience>$($samlConnection.spEntityId)</saml:Audience>
+      </saml:AudienceRestriction>
+    </saml:Conditions>
+    <saml:AttributeStatement>
+      <saml:Attribute Name=""email"">
+        <saml:AttributeValue>$samlUserEmail</saml:AttributeValue>
+      </saml:Attribute>
+      <saml:Attribute Name=""name"">
+        <saml:AttributeValue>SAML Smoke User</saml:AttributeValue>
+      </saml:Attribute>
+    </saml:AttributeStatement>
+  </saml:Assertion>
+</samlp:Response>
+"@
+$samlResponseB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($samlResponseXml))
+
+Write-Host "Completing SAML ACS"
+$samlAcs = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/saml/$($samlConnection.slug)/acs" -ContentType "application/json" -Body (@{
+  SAMLResponse = $samlResponseB64
+  RelayState = $samlStart.relayState
+} | ConvertTo-Json -Compress)
+if (-not $samlAcs.session.accessToken -or $samlAcs.user.email -ne $samlUserEmail) {
+  throw "SAML ACS sign-in failed"
+}
+
+Write-Host "Setting compliance retention policies"
+$retention = Invoke-RestMethod -Method Put -Uri "$BaseUrl/v1/orgs/$orgId/compliance/retention" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body (@{
+  policies = @(
+    @{ targetType = "audit_logs"; retentionDays = 30 },
+    @{ targetType = "export_jobs"; retentionDays = 14 },
+    @{ targetType = "saml_auth_states"; retentionDays = 7 }
+  )
+} | ConvertTo-Json -Compress -Depth 6)
+if (-not $retention.retentionPolicies -or $retention.retentionPolicies.Count -lt 3) {
+  throw "Retention policy update failed"
+}
+
+Write-Host "Running compliance prune dry-run"
+$prune = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/orgs/$orgId/compliance/prune" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body (@{
+  dryRun = $true
+} | ConvertTo-Json -Compress)
+if (-not $prune.affected) {
+  throw "Compliance prune endpoint failed"
+}
+
+Write-Host "Creating organization KMS key"
+$kmsKeyCreate = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/orgs/$orgId/kms/keys" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body (@{
+  alias = "smoke-key-$stamp"
+} | ConvertTo-Json -Compress)
+$kmsKey = $kmsKeyCreate.key
+if (-not $kmsKey.id) {
+  throw "KMS key creation failed"
+}
+
+Write-Host "Validating KMS encrypt/decrypt"
+$kmsEncrypt = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/orgs/$orgId/kms/keys/$($kmsKey.id)/encrypt" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body (@{
+  plaintext = "smoke-secret-$stamp"
+} | ConvertTo-Json -Compress)
+if (-not $kmsEncrypt.ciphertext) {
+  throw "KMS encrypt failed"
+}
+$kmsDecrypt = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/orgs/$orgId/kms/keys/$($kmsKey.id)/decrypt" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body (@{
+  ciphertext = $kmsEncrypt.ciphertext
+} | ConvertTo-Json -Compress)
+if ($kmsDecrypt.plaintext -ne "smoke-secret-$stamp") {
+  throw "KMS decrypt failed"
+}
+
+Write-Host "Creating encrypted compliance export job"
+$exportJobCreate = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/orgs/$orgId/compliance/exports" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body (@{
+  targetType = "all"
+  kmsKeyId = $kmsKey.id
+  filters = @{ auditLogLimit = 200 }
+} | ConvertTo-Json -Compress -Depth 6)
+if (-not $exportJobCreate.job.id) {
+  throw "Export job creation failed"
+}
+
+Write-Host "Reading compliance export result"
+$exportJob = Invoke-RestMethod -Method Get -Uri "$BaseUrl/v1/orgs/$orgId/compliance/exports/$($exportJobCreate.job.id)?includeResult=true" -Headers @{ Authorization = "Bearer $token" }
+if ($exportJob.job.status -ne "completed" -or -not $exportJob.job.resultEncrypted -or -not $exportJob.result.ciphertext) {
+  throw "Export job did not complete with encrypted payload"
+}
+
+Write-Host "Reading enterprise diagnostics"
+$enterpriseDiag = Invoke-RestMethod -Method Get -Uri "$BaseUrl/v1/orgs/$orgId/enterprise/diagnostics" -Headers @{ Authorization = "Bearer $token" }
+if (-not $enterpriseDiag.diagnostics -or $enterpriseDiag.diagnostics.samlConnections.total -lt 1) {
+  throw "Enterprise diagnostics endpoint failed"
 }
 
 Write-Host "Smoke test succeeded for $email"

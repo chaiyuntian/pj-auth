@@ -35,3 +35,12 @@ Build a Cloudflare-native auth platform that converges toward Clerk-like functio
 - [x] Hosted sign-in/sign-up UI + embeddable widgets.
 - [x] Client SDK packages for React/Next.js and server runtimes.
 - [x] Managed migrations and one-command bootstrap CLI.
+
+## Phase 4: Enterprise Parity
+- [x] SCIM 2.0 provisioning API with org-scoped bearer tokens.
+- [x] SAML IdP/SP protocol surface (metadata exchange + assertion validation checks + ACS session issuance).
+- [x] Enterprise admin API parity (connections, domain routing, diagnostics).
+- [x] Compliance controls (retention policies, export jobs, key management).
+
+## Phase 5: Hardening
+- [ ] XML DSig cryptographic signature verification for SAML assertions (canonicalization + digest/signature checks).

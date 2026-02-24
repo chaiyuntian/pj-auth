@@ -126,7 +126,13 @@ export const assessAndRecordSessionRisk = async (params: {
   sessionId: string;
   ipAddress: string | null;
   userAgent: string | null;
-  eventType: "auth.sign_up" | "auth.sign_in" | "auth.refresh" | "auth.sign_in_google" | "auth.passkey_sign_in";
+  eventType:
+    | "auth.sign_up"
+    | "auth.sign_in"
+    | "auth.refresh"
+    | "auth.sign_in_google"
+    | "auth.passkey_sign_in"
+    | "auth.sign_in_saml";
 }): Promise<SessionRiskEvaluation> => {
   const sessions = await listUserSessions(params.db, params.userId);
   const evaluated = evaluate({

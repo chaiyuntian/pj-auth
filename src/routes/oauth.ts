@@ -20,6 +20,7 @@ import { setRefreshTokenCookie } from "../lib/cookies";
 import { appendQuery, publicUser } from "../lib/http";
 import { getAppUrl } from "../lib/config";
 import { assessAndRecordSessionRisk } from "../lib/session-risk";
+import { issueSignInMfaChallengeIfNeeded } from "../lib/mfa-auth";
 
 const tokenResponseSchema = z.object({
   access_token: z.string(),
@@ -259,6 +260,31 @@ oauthRoutes.get("/google/callback", async (context) => {
     emailVerified: userInfo.email_verified
   });
 
+  const mfaChallenge = await issueSignInMfaChallengeIfNeeded({
+    db: context.env.DB,
+    userId,
+    primaryMethod: "google_oauth",
+    ipAddress: readRequestIp(context.req.raw),
+    userAgent: context.req.header("user-agent") ?? null
+  });
+  const redirectTarget = oauthState.redirect_to || `${getAppUrl(context.env, context.req.raw)}/demo`;
+  if (mfaChallenge.required) {
+    if (oauthState.redirect_to) {
+      const urlWithStatus = appendQuery(redirectTarget, "pj_auth", "mfa_required");
+      const urlWithChallenge = appendQuery(urlWithStatus, "challenge_id", mfaChallenge.challengeId);
+      return context.redirect(urlWithChallenge, 302);
+    }
+    const user = await findUserById(context.env.DB, userId);
+    return context.json({
+      mfaRequired: true,
+      challengeId: mfaChallenge.challengeId,
+      expiresAt: mfaChallenge.expiresAt,
+      methods: mfaChallenge.methods,
+      primaryMethod: mfaChallenge.primaryMethod,
+      user: user ? publicUser(user) : null
+    });
+  }
+
   const tokens = await createSessionAndTokens(context.env, {
     userId,
     userAgent: context.req.header("user-agent"),
@@ -294,8 +320,6 @@ oauthRoutes.get("/google/callback", async (context) => {
       500
     );
   }
-
-  const redirectTarget = oauthState.redirect_to || `${getAppUrl(context.env, context.req.raw)}/demo`;
   if (oauthState.redirect_to) {
     const urlWithStatus = appendQuery(redirectTarget, "pj_auth", "success");
     return context.redirect(`${urlWithStatus}#access_token=${encodeURIComponent(tokens.accessToken)}`, 302);

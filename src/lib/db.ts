@@ -105,6 +105,46 @@ export type PasskeyChallengeRow = {
   created_at: string;
 };
 
+export type MfaTotpFactorRow = {
+  id: string;
+  user_id: string;
+  secret_base32: string;
+  issuer: string;
+  account_name: string;
+  verified_at: string | null;
+  disabled_at: string | null;
+  last_used_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MfaRecoveryCodeRow = {
+  id: string;
+  user_id: string;
+  code_hash: string;
+  used_at: string | null;
+  created_at: string;
+};
+
+export type MfaChallengeRow = {
+  id: string;
+  user_id: string;
+  purpose: "sign_in";
+  metadata_json: string | null;
+  expires_at: string;
+  used_at: string | null;
+  created_at: string;
+};
+
+export type AuditLogRow = {
+  id: string;
+  actor_type: string;
+  actor_id: string | null;
+  event_type: string;
+  metadata_json: string | null;
+  created_at: string;
+};
+
 type OAuthStateRow = {
   state: string;
   provider: string;
@@ -260,6 +300,19 @@ export type ApiKeyRow = {
   expires_at: string | null;
   last_used_at: string | null;
   revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ScimTokenRow = {
+  id: string;
+  organization_id: string;
+  name: string;
+  token_prefix: string;
+  token_hash: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_by_user_id: string;
   created_at: string;
   updated_at: string;
 };
@@ -1134,6 +1187,263 @@ export const touchPasskeyCredentialUsage = async (
     .run();
 };
 
+export const createTotpFactor = async (
+  db: D1Database,
+  params: {
+    id: string;
+    userId: string;
+    secretBase32: string;
+    issuer: string;
+    accountName: string;
+  }
+): Promise<void> => {
+  const now = nowIso();
+  await db
+    .prepare(
+      `INSERT INTO mfa_totp_factors (
+        id, user_id, secret_base32, issuer, account_name, verified_at, disabled_at, last_used_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`
+    )
+    .bind(params.id, params.userId, params.secretBase32, params.issuer, params.accountName, now, now)
+    .run();
+};
+
+export const findTotpFactorByIdForUser = async (
+  db: D1Database,
+  params: {
+    factorId: string;
+    userId: string;
+  }
+): Promise<MfaTotpFactorRow | null> =>
+  db
+    .prepare(
+      `SELECT id,
+              user_id,
+              secret_base32,
+              issuer,
+              account_name,
+              verified_at,
+              disabled_at,
+              last_used_at,
+              created_at,
+              updated_at
+       FROM mfa_totp_factors
+       WHERE id = ? AND user_id = ?`
+    )
+    .bind(params.factorId, params.userId)
+    .first<MfaTotpFactorRow>();
+
+export const findActiveVerifiedTotpFactorForUser = async (
+  db: D1Database,
+  userId: string
+): Promise<MfaTotpFactorRow | null> =>
+  db
+    .prepare(
+      `SELECT id,
+              user_id,
+              secret_base32,
+              issuer,
+              account_name,
+              verified_at,
+              disabled_at,
+              last_used_at,
+              created_at,
+              updated_at
+       FROM mfa_totp_factors
+       WHERE user_id = ?
+         AND verified_at IS NOT NULL
+         AND disabled_at IS NULL
+       ORDER BY datetime(verified_at) DESC
+       LIMIT 1`
+    )
+    .bind(userId)
+    .first<MfaTotpFactorRow>();
+
+export const listTotpFactorsForUser = async (db: D1Database, userId: string): Promise<MfaTotpFactorRow[]> => {
+  const result = await db
+    .prepare(
+      `SELECT id,
+              user_id,
+              secret_base32,
+              issuer,
+              account_name,
+              verified_at,
+              disabled_at,
+              last_used_at,
+              created_at,
+              updated_at
+       FROM mfa_totp_factors
+       WHERE user_id = ?
+       ORDER BY datetime(created_at) DESC`
+    )
+    .bind(userId)
+    .all<MfaTotpFactorRow>();
+  return result.results ?? [];
+};
+
+export const verifyTotpFactor = async (
+  db: D1Database,
+  params: {
+    factorId: string;
+    userId: string;
+  }
+): Promise<boolean> => {
+  const now = nowIso();
+  const result = await db
+    .prepare(
+      `UPDATE mfa_totp_factors
+       SET verified_at = COALESCE(verified_at, ?),
+           disabled_at = NULL,
+           updated_at = ?
+       WHERE id = ? AND user_id = ?`
+    )
+    .bind(now, now, params.factorId, params.userId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+};
+
+export const disableTotpFactorsForUser = async (
+  db: D1Database,
+  params: {
+    userId: string;
+  }
+): Promise<number> => {
+  const now = nowIso();
+  const result = await db
+    .prepare(
+      `UPDATE mfa_totp_factors
+       SET disabled_at = ?, updated_at = ?
+       WHERE user_id = ? AND disabled_at IS NULL`
+    )
+    .bind(now, now, params.userId)
+    .run();
+  return result.meta.changes ?? 0;
+};
+
+export const touchTotpFactorUsage = async (db: D1Database, factorId: string): Promise<void> => {
+  const now = nowIso();
+  await db
+    .prepare(
+      `UPDATE mfa_totp_factors
+       SET last_used_at = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(now, now, factorId)
+    .run();
+};
+
+export const replaceRecoveryCodes = async (
+  db: D1Database,
+  params: {
+    userId: string;
+    codeHashes: string[];
+  }
+): Promise<void> => {
+  const now = nowIso();
+  const statements: D1PreparedStatement[] = [
+    db.prepare(`DELETE FROM mfa_recovery_codes WHERE user_id = ?`).bind(params.userId)
+  ];
+  for (const codeHash of params.codeHashes) {
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO mfa_recovery_codes (id, user_id, code_hash, used_at, created_at)
+           VALUES (?, ?, ?, NULL, ?)`
+        )
+        .bind(crypto.randomUUID(), params.userId, codeHash, now)
+    );
+  }
+  await db.batch(statements);
+};
+
+export const countRemainingRecoveryCodes = async (db: D1Database, userId: string): Promise<number> => {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM mfa_recovery_codes
+       WHERE user_id = ? AND used_at IS NULL`
+    )
+    .bind(userId)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+};
+
+export const consumeRecoveryCodeHash = async (
+  db: D1Database,
+  params: {
+    userId: string;
+    codeHash: string;
+  }
+): Promise<MfaRecoveryCodeRow | null> => {
+  const row = await db
+    .prepare(
+      `SELECT id, user_id, code_hash, used_at, created_at
+       FROM mfa_recovery_codes
+       WHERE user_id = ? AND code_hash = ?`
+    )
+    .bind(params.userId, params.codeHash)
+    .first<MfaRecoveryCodeRow>();
+  if (!row || row.used_at) {
+    return null;
+  }
+  const result = await db
+    .prepare(`UPDATE mfa_recovery_codes SET used_at = ? WHERE id = ? AND used_at IS NULL`)
+    .bind(nowIso(), row.id)
+    .run();
+  if ((result.meta.changes ?? 0) === 0) {
+    return null;
+  }
+  return row;
+};
+
+export const createMfaChallenge = async (
+  db: D1Database,
+  params: {
+    id: string;
+    userId: string;
+    purpose: "sign_in";
+    metadataJson?: string | null;
+    expiresAt: string;
+  }
+): Promise<void> => {
+  await db
+    .prepare(
+      `INSERT INTO mfa_challenges (
+        id, user_id, purpose, metadata_json, expires_at, used_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?)`
+    )
+    .bind(params.id, params.userId, params.purpose, params.metadataJson ?? null, params.expiresAt, nowIso())
+    .run();
+};
+
+export const consumeMfaChallengeById = async (
+  db: D1Database,
+  params: {
+    challengeId: string;
+    purpose: "sign_in";
+  }
+): Promise<MfaChallengeRow | null> => {
+  const row = await db
+    .prepare(
+      `SELECT id, user_id, purpose, metadata_json, expires_at, used_at, created_at
+       FROM mfa_challenges
+       WHERE id = ? AND purpose = ?`
+    )
+    .bind(params.challengeId, params.purpose)
+    .first<MfaChallengeRow>();
+  if (!row || row.used_at || Date.parse(row.expires_at) <= Date.now()) {
+    return null;
+  }
+  const result = await db
+    .prepare(`UPDATE mfa_challenges SET used_at = ? WHERE id = ? AND used_at IS NULL`)
+    .bind(nowIso(), row.id)
+    .run();
+  if ((result.meta.changes ?? 0) === 0) {
+    return null;
+  }
+  return row;
+};
+
 export const writeAuditLog = async (
   db: D1Database,
   params: {
@@ -1151,6 +1461,66 @@ export const writeAuditLog = async (
     )
     .bind(params.id, params.actorType, params.actorId ?? null, params.eventType, params.metadataJson ?? null, nowIso())
     .run();
+};
+
+export const listAuditLogs = async (
+  db: D1Database,
+  params?: {
+    limit?: number;
+    actorType?: string;
+    eventType?: string;
+  }
+): Promise<AuditLogRow[]> => {
+  const limit = params?.limit && params.limit > 0 ? Math.min(params.limit, 500) : 100;
+  if (params?.actorType && params?.eventType) {
+    const result = await db
+      .prepare(
+        `SELECT id, actor_type, actor_id, event_type, metadata_json, created_at
+         FROM audit_logs
+         WHERE actor_type = ? AND event_type = ?
+         ORDER BY datetime(created_at) DESC
+         LIMIT ?`
+      )
+      .bind(params.actorType, params.eventType, limit)
+      .all<AuditLogRow>();
+    return result.results ?? [];
+  }
+  if (params?.actorType) {
+    const result = await db
+      .prepare(
+        `SELECT id, actor_type, actor_id, event_type, metadata_json, created_at
+         FROM audit_logs
+         WHERE actor_type = ?
+         ORDER BY datetime(created_at) DESC
+         LIMIT ?`
+      )
+      .bind(params.actorType, limit)
+      .all<AuditLogRow>();
+    return result.results ?? [];
+  }
+  if (params?.eventType) {
+    const result = await db
+      .prepare(
+        `SELECT id, actor_type, actor_id, event_type, metadata_json, created_at
+         FROM audit_logs
+         WHERE event_type = ?
+         ORDER BY datetime(created_at) DESC
+         LIMIT ?`
+      )
+      .bind(params.eventType, limit)
+      .all<AuditLogRow>();
+    return result.results ?? [];
+  }
+  const result = await db
+    .prepare(
+      `SELECT id, actor_type, actor_id, event_type, metadata_json, created_at
+       FROM audit_logs
+       ORDER BY datetime(created_at) DESC
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<AuditLogRow>();
+  return result.results ?? [];
 };
 
 export const findOrganizationBySlug = async (
@@ -2097,6 +2467,124 @@ export const revokeServiceAccountApiKey = async (
        WHERE id = ? AND owner_type = 'service_account' AND service_account_id = ? AND revoked_at IS NULL`
     )
     .bind(now, now, params.apiKeyId, params.serviceAccountId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+};
+
+export const createScimToken = async (
+  db: D1Database,
+  params: {
+    id: string;
+    organizationId: string;
+    name: string;
+    tokenPrefix: string;
+    tokenHash: string;
+    createdByUserId: string;
+  }
+): Promise<void> => {
+  const now = nowIso();
+  await db
+    .prepare(
+      `INSERT INTO scim_tokens (
+        id,
+        organization_id,
+        name,
+        token_prefix,
+        token_hash,
+        last_used_at,
+        revoked_at,
+        created_by_user_id,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`
+    )
+    .bind(
+      params.id,
+      params.organizationId,
+      params.name,
+      params.tokenPrefix,
+      params.tokenHash,
+      params.createdByUserId,
+      now,
+      now
+    )
+    .run();
+};
+
+export const listScimTokensForOrganization = async (
+  db: D1Database,
+  organizationId: string
+): Promise<ScimTokenRow[]> => {
+  const result = await db
+    .prepare(
+      `SELECT id,
+              organization_id,
+              name,
+              token_prefix,
+              token_hash,
+              last_used_at,
+              revoked_at,
+              created_by_user_id,
+              created_at,
+              updated_at
+       FROM scim_tokens
+       WHERE organization_id = ?
+       ORDER BY datetime(created_at) DESC`
+    )
+    .bind(organizationId)
+    .all<ScimTokenRow>();
+  return result.results ?? [];
+};
+
+export const findActiveScimTokenByHash = async (
+  db: D1Database,
+  tokenHash: string
+): Promise<ScimTokenRow | null> =>
+  db
+    .prepare(
+      `SELECT id,
+              organization_id,
+              name,
+              token_prefix,
+              token_hash,
+              last_used_at,
+              revoked_at,
+              created_by_user_id,
+              created_at,
+              updated_at
+       FROM scim_tokens
+       WHERE token_hash = ? AND revoked_at IS NULL`
+    )
+    .bind(tokenHash)
+    .first<ScimTokenRow>();
+
+export const touchScimTokenUsage = async (db: D1Database, tokenId: string): Promise<void> => {
+  const now = nowIso();
+  await db
+    .prepare(
+      `UPDATE scim_tokens
+       SET last_used_at = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(now, now, tokenId)
+    .run();
+};
+
+export const revokeScimToken = async (
+  db: D1Database,
+  params: {
+    organizationId: string;
+    tokenId: string;
+  }
+): Promise<boolean> => {
+  const now = nowIso();
+  const result = await db
+    .prepare(
+      `UPDATE scim_tokens
+       SET revoked_at = ?, updated_at = ?
+       WHERE id = ? AND organization_id = ? AND revoked_at IS NULL`
+    )
+    .bind(now, now, params.tokenId, params.organizationId)
     .run();
   return (result.meta.changes ?? 0) > 0;
 };

@@ -20,6 +20,7 @@ import { createSessionAndTokens, readRequestIp } from "../lib/auth";
 import { setRefreshTokenCookie } from "../lib/cookies";
 import { publicUser } from "../lib/http";
 import { assessAndRecordSessionRisk } from "../lib/session-risk";
+import { issueSignInMfaChallengeIfNeeded } from "../lib/mfa-auth";
 
 const CHALLENGE_TTL_SECONDS = 5 * 60;
 
@@ -408,6 +409,24 @@ passkeyRoutes.post("/authenticate/finish", async (context) => {
       },
       404
     );
+  }
+
+  const mfaChallenge = await issueSignInMfaChallengeIfNeeded({
+    db: context.env.DB,
+    userId: user.id,
+    primaryMethod: "passkey",
+    ipAddress: readRequestIp(context.req.raw),
+    userAgent: context.req.header("user-agent") ?? null
+  });
+  if (mfaChallenge.required) {
+    return context.json({
+      mfaRequired: true,
+      challengeId: mfaChallenge.challengeId,
+      expiresAt: mfaChallenge.expiresAt,
+      methods: mfaChallenge.methods,
+      primaryMethod: mfaChallenge.primaryMethod,
+      user: publicUser(user)
+    });
   }
 
   const tokens = await createSessionAndTokens(context.env, {

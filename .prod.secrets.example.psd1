@@ -1,5 +1,6 @@
 @{
   JWT_SIGNING_KEY = "replace-with-strong-random-secret"
+  KMS_MASTER_KEY = "replace-with-strong-random-secret"
   ADMIN_API_KEY = "replace-with-admin-api-key"
   RESEND_API_KEY = "replace-with-resend-api-key"
   TURNSTILE_SECRET_KEY = "replace-with-cloudflare-turnstile-secret"

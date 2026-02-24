@@ -1,0 +1,14 @@
+{
+  "name": "@pajamadot/auth-nextjs",
+  "version": "0.1.0",
+  "description": "Next.js helpers for pj-auth",
+  "type": "module",
+  "main": "index.js",
+  "peerDependencies": {
+    "next": ">=14"
+  },
+  "dependencies": {
+    "@pajamadot/auth-server": "0.1.0"
+  },
+  "license": "MIT"
+}
