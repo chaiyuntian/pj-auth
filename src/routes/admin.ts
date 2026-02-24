@@ -93,9 +93,19 @@ adminRoutes.get("/stats", async (context) => {
   const sessions = await context.env.DB.prepare("SELECT COUNT(*) as count FROM sessions WHERE revoked_at IS NULL").first<{
     count: number;
   }>();
+  const organizations = await context.env.DB
+    .prepare("SELECT COUNT(*) as count FROM organizations")
+    .first<{ count: number }>()
+    .catch(() => ({ count: 0 }));
+  const teams = await context.env.DB
+    .prepare("SELECT COUNT(*) as count FROM teams")
+    .first<{ count: number }>()
+    .catch(() => ({ count: 0 }));
   return context.json({
     users: users?.count ?? 0,
-    activeSessions: sessions?.count ?? 0
+    activeSessions: sessions?.count ?? 0,
+    organizations: organizations?.count ?? 0,
+    teams: teams?.count ?? 0
   });
 });
 

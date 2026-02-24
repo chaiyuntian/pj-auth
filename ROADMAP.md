@@ -19,7 +19,7 @@ Build a Cloudflare-native auth platform that converges toward Clerk-like functio
 - [x] Email verification flow with signed links and resend logic.
 - [x] Password reset flow with one-time tokens.
 - [x] Multi-session management endpoints (list/revoke per device).
-- [ ] Organizations/teams and memberships.
+- [x] Organizations/teams and memberships.
 - [ ] API keys and service account auth flows.
 
 ## Phase 2: Advanced Controls

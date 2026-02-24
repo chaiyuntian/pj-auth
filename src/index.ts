@@ -5,6 +5,7 @@ import { authRoutes } from "./routes/auth";
 import { oauthRoutes } from "./routes/oauth";
 import { adminRoutes } from "./routes/admin";
 import { demoRoutes } from "./routes/demo";
+import { orgRoutes } from "./routes/orgs";
 import { applyApiCors } from "./middleware/cors";
 import { createAuthRateLimitMiddleware } from "./middleware/rate-limit";
 
@@ -22,6 +23,7 @@ const authRateLimit = createAuthRateLimitMiddleware();
 
 app.use("/v1/auth/*", authRateLimit);
 app.use("/v1/oauth/*", authRateLimit);
+app.use("/v1/orgs/*", authRateLimit);
 
 app.use("*", async (context, next) => {
   await next();
@@ -71,6 +73,7 @@ app.get("/healthz", async (context) => {
 
 app.route("/v1/auth", authRoutes);
 app.route("/v1/oauth", oauthRoutes);
+app.route("/v1/orgs", orgRoutes);
 app.route("/v1/admin", adminRoutes);
 app.route("/", demoRoutes);
 

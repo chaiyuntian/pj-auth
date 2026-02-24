@@ -15,6 +15,7 @@ import {
   findUserByEmail,
   findUserById,
   invalidateVerificationCodes,
+  listOrganizationsForUser,
   listUserSessions,
   revokeAllUserSessions,
   revokeOtherUserSessions,
@@ -785,7 +786,8 @@ authRoutes.post("/sign-out", requireAuth, async (context) => {
 });
 
 authRoutes.get("/me", requireAuth, async (context) => {
-  const user = await findUserById(context.env.DB, context.get("authUserId"));
+  const userId = context.get("authUserId");
+  const user = await findUserById(context.env.DB, userId);
   if (!user) {
     return context.json(
       {
@@ -797,5 +799,15 @@ authRoutes.get("/me", requireAuth, async (context) => {
       404
     );
   }
-  return context.json({ user: publicUser(user) });
+  const organizations = await listOrganizationsForUser(context.env.DB, userId);
+  return context.json({
+    user: publicUser(user),
+    organizations: organizations.map((organization) => ({
+      id: organization.id,
+      slug: organization.slug,
+      name: organization.name,
+      role: organization.membership_role,
+      joinedAt: organization.membership_created_at
+    }))
+  });
 });

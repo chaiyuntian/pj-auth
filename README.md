@@ -8,6 +8,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - Email verification flow (`start` + `confirm`) with one-time tokens.
 - Password reset flow (`start` + `confirm`) with one-time tokens.
 - Session management APIs (list sessions, revoke one, revoke others, revoke all).
+- Organizations and teams with role-based memberships (`owner/admin/member`, `maintainer/member`).
 - Transactional email delivery via Resend (with safe log fallback).
 - Google OAuth (`/v1/oauth/google/start`, `/v1/oauth/google/callback`).
 - Provider config management via admin API key.
@@ -27,11 +28,13 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `src/routes/auth.ts`: password/session APIs.
 - `src/routes/oauth.ts`: Google OAuth flow.
 - `src/routes/admin.ts`: OAuth provider settings + stats.
+- `src/routes/orgs.ts`: organization/team and membership APIs.
 - `src/lib/mailer.ts`: outbound email provider integration.
 - `src/routes/demo.ts`: end-to-end browser demo and SDK script.
 - `migrations/0001_init.sql`: initial D1 schema.
 - `migrations/0002_verification_indexes.sql`: token/session indexes.
 - `migrations/0003_rate_limits.sql`: D1 fixed-window rate-limit store.
+- `migrations/0004_orgs_teams.sql`: organizations, memberships, teams, team memberships.
 - `tools/capability-evolver/`: autonomous analyze->mutate->validate->log engine.
 - `ROADMAP.md`: parity plan toward full Clerk-like surface.
 
@@ -52,6 +55,19 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `GET /v1/auth/me`
 - `GET /v1/oauth/google/start`
 - `GET /v1/oauth/google/callback`
+- `GET /v1/orgs` (Bearer)
+- `POST /v1/orgs` (Bearer)
+- `GET /v1/orgs/:orgId` (Bearer)
+- `GET /v1/orgs/:orgId/members` (Bearer)
+- `POST /v1/orgs/:orgId/members` (Bearer)
+- `PATCH /v1/orgs/:orgId/members/:userId` (Bearer)
+- `DELETE /v1/orgs/:orgId/members/:userId` (Bearer)
+- `GET /v1/orgs/:orgId/teams` (Bearer)
+- `POST /v1/orgs/:orgId/teams` (Bearer)
+- `GET /v1/orgs/:orgId/teams/:teamId/members` (Bearer)
+- `POST /v1/orgs/:orgId/teams/:teamId/members` (Bearer)
+- `PATCH /v1/orgs/:orgId/teams/:teamId/members/:userId` (Bearer)
+- `DELETE /v1/orgs/:orgId/teams/:teamId/members/:userId` (Bearer)
 - `GET /v1/admin/oauth/providers/google` (`x-admin-api-key`)
 - `PUT /v1/admin/oauth/providers/google` (`x-admin-api-key`)
 - `GET /v1/admin/stats` (`x-admin-api-key`)
@@ -158,3 +174,4 @@ curl -X POST https://users.pajamadot.com/v1/auth/sign-up \
 - Restrict CORS origins for production.
 - Set `PUBLIC_AUTH_URL` to your production auth domain.
 - Enable rate-limiting / bot protection on auth endpoints before heavy traffic.
+- Keep at least one `owner` per organization; role downgrade/removal of last owner is blocked.

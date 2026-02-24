@@ -2,6 +2,19 @@
   "version": 1,
   "capsules": [
     {
+      "id": "run-typecheck-a42291599872",
+      "geneId": "run-typecheck",
+      "target": "src",
+      "summary": "Successful run-typecheck cycle",
+      "createdAt": "2026-02-24T13:19:41.995Z",
+      "validations": [
+        {
+          "command": "npm run typecheck",
+          "code": 0
+        }
+      ]
+    },
+    {
       "id": "run-typecheck-99691fce9dd7",
       "geneId": "run-typecheck",
       "target": "src",
