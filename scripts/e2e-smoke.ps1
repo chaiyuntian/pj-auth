@@ -64,6 +64,12 @@ if (-not $health.ok) {
   throw "Health check failed"
 }
 
+Write-Host "Loading hosted enterprise console"
+$enterpriseHosted = Invoke-WebRequest -Method Get -Uri "$BaseUrl/hosted/enterprise"
+if ($enterpriseHosted.StatusCode -ne 200 -or -not ($enterpriseHosted.Content -match "Enterprise Console")) {
+  throw "Hosted enterprise console is unavailable"
+}
+
 Write-Host "Creating smoke user: $email"
 $signup = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/auth/sign-up" -ContentType "application/json" -Body (@{
   email = $email

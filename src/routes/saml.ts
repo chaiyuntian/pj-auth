@@ -486,7 +486,10 @@ samlRoutes.post("/:connectionSlug/acs", async (context) => {
         verified: signatureVerification.verified,
         reason: signatureVerification.reason,
         signatureAlgorithm: signatureVerification.signatureAlgorithm,
-        canonicalizationAlgorithm: signatureVerification.canonicalizationAlgorithm
+        canonicalizationAlgorithm: signatureVerification.canonicalizationAlgorithm,
+        referenceCount: signatureVerification.referenceCount,
+        referenceDigestsValid: signatureVerification.referenceDigestsValid,
+        referenceValidationReason: signatureVerification.referenceValidationReason
       },
       validationWarnings: validation.warnings
     })

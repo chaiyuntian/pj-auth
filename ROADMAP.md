@@ -44,4 +44,4 @@ Build a Cloudflare-native auth platform that converges toward Clerk-like functio
 
 ## Phase 5: Hardening
 - [x] XML DSig cryptographic signature verification path for SAML assertions with configurable enforcement (`off|optional|required`).
-- [ ] Full XML DSig reference digest validation + strict canonicalization transform coverage across IdP variants.
+- [x] XML DSig reference digest validation (URI fragment resolution, digest method checks, transform processing) with strict fail-closed behavior in `required` mode.

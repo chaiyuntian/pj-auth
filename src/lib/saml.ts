@@ -43,6 +43,25 @@ const readOpenTagAttributes = (xml: string, tagLocalName: string): Record<string
   return map;
 };
 
+const readTagAttributesList = (xml: string, tagLocalName: string): Record<string, string>[] => {
+  const pattern = new RegExp(`<(?:[a-zA-Z0-9_]+:)?${tagLocalName}\\b([^>]*)\\/?>`, "gi");
+  const items: Record<string, string>[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(xml)) !== null) {
+    const rawAttributes = match[1] || "";
+    const map: Record<string, string> = {};
+    const attributeRegex = /([a-zA-Z_:][a-zA-Z0-9_.:-]*)\s*=\s*"([^"]*)"/g;
+    let attributeMatch: RegExpExecArray | null;
+    while ((attributeMatch = attributeRegex.exec(rawAttributes)) !== null) {
+      map[attributeMatch[1]] = decodeXmlEntities(attributeMatch[2]);
+    }
+    items.push(map);
+  }
+  return items;
+};
+
+const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const normalizeIsoLike = (value: string | null): string | null => {
   if (!value) {
     return null;
@@ -65,6 +84,18 @@ const base64ToBytes = (value: string): Uint8Array => {
     bytes[index] = decoded.charCodeAt(index);
   }
   return bytes;
+};
+
+const bytesEqual = (left: Uint8Array, right: Uint8Array): boolean => {
+  if (left.byteLength !== right.byteLength) {
+    return false;
+  }
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
 };
 
 type Asn1Node = {
@@ -173,6 +204,9 @@ export type SamlXmlSignatureVerification = {
   verified: boolean;
   signatureAlgorithm: string | null;
   canonicalizationAlgorithm: string | null;
+  referenceCount: number;
+  referenceDigestsValid: boolean | null;
+  referenceValidationReason: string | null;
   reason: string | null;
 };
 
@@ -209,11 +243,245 @@ const extractSignedInfo = (signatureXml: string): string | null => {
   return match?.[0] ?? null;
 };
 
-const canonicalizeSignedInfo = (signedInfoXml: string): string =>
-  signedInfoXml
+const canonicalizeXmlFragment = (xmlFragment: string): string =>
+  xmlFragment
     .replace(/^\s*<\?xml[^>]*\?>\s*/i, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\r\n?/g, "\n")
     .replace(/>\s+</g, "><")
     .trim();
+
+const canonicalizeSignedInfo = (signedInfoXml: string): string => canonicalizeXmlFragment(signedInfoXml);
+
+const SIGNED_INFO_CANONICALIZATION_ALGORITHMS = new Set<string>([
+  "http://www.w3.org/tr/2001/rec-xml-c14n-20010315",
+  "http://www.w3.org/tr/2001/rec-xml-c14n-20010315#withcomments",
+  "http://www.w3.org/2001/10/xml-exc-c14n#",
+  "http://www.w3.org/2001/10/xml-exc-c14n#withcomments"
+]);
+
+const REFERENCE_TRANSFORM_CANONICALIZATION_ALGORITHMS = new Set<string>([
+  "http://www.w3.org/tr/2001/rec-xml-c14n-20010315",
+  "http://www.w3.org/tr/2001/rec-xml-c14n-20010315#withcomments",
+  "http://www.w3.org/2001/10/xml-exc-c14n#",
+  "http://www.w3.org/2001/10/xml-exc-c14n#withcomments"
+]);
+
+const ENVELOPED_SIGNATURE_TRANSFORM = "http://www.w3.org/2000/09/xmldsig#enveloped-signature";
+
+const normalizeAlgorithmUri = (value: string | null): string | null => {
+  const normalized = value?.trim().toLowerCase() ?? "";
+  return normalized || null;
+};
+
+const stripSignatureElements = (xml: string): string =>
+  xml.replace(
+    /<(?:[a-zA-Z0-9_]+:)?Signature\b[\s\S]*?<\/(?:[a-zA-Z0-9_]+:)?Signature>/gi,
+    ""
+  );
+
+const findElementById = (xml: string, id: string): string | null => {
+  const escapedId = escapeRegex(id);
+  const openTagPattern = new RegExp(
+    `<([a-zA-Z_:][a-zA-Z0-9_.:-]*)\\b[^>]*\\b(?:ID|Id|id|xml:id)\\s*=\\s*"${escapedId}"[^>]*>`,
+    "g"
+  );
+  const openTagMatch = openTagPattern.exec(xml);
+  if (!openTagMatch) {
+    return null;
+  }
+  const tagName = openTagMatch[1];
+  const start = openTagMatch.index;
+  const openingTag = openTagMatch[0];
+  if (/\/>\s*$/.test(openingTag)) {
+    return openingTag;
+  }
+
+  const sameTagPattern = new RegExp(`<\\/?${escapeRegex(tagName)}\\b[^>]*>`, "g");
+  sameTagPattern.lastIndex = start;
+  let depth = 0;
+  let token: RegExpExecArray | null;
+  while ((token = sameTagPattern.exec(xml)) !== null) {
+    const rawToken = token[0];
+    const isClosing = rawToken.startsWith("</");
+    const selfClosing = /\/>\s*$/.test(rawToken);
+    if (isClosing) {
+      depth -= 1;
+    } else if (!selfClosing) {
+      depth += 1;
+    }
+    if (depth === 0) {
+      return xml.slice(start, sameTagPattern.lastIndex);
+    }
+  }
+  return null;
+};
+
+const resolveDigestAlgorithm = (digestMethodAlgorithm: string | null): AlgorithmIdentifier | null => {
+  const uri = normalizeAlgorithmUri(digestMethodAlgorithm);
+  if (!uri) {
+    return null;
+  }
+  if (uri === "http://www.w3.org/2000/09/xmldsig#sha1") {
+    return "SHA-1";
+  }
+  if (
+    uri === "http://www.w3.org/2001/04/xmlenc#sha256" ||
+    uri === "http://www.w3.org/2001/04/xmldsig-more#sha256"
+  ) {
+    return "SHA-256";
+  }
+  if (uri === "http://www.w3.org/2001/04/xmldsig-more#sha384") {
+    return "SHA-384";
+  }
+  if (
+    uri === "http://www.w3.org/2001/04/xmlenc#sha512" ||
+    uri === "http://www.w3.org/2001/04/xmldsig-more#sha512"
+  ) {
+    return "SHA-512";
+  }
+  return null;
+};
+
+const applyReferenceTransform = (value: string, algorithm: string): { ok: true; value: string } | { ok: false } => {
+  const normalized = normalizeAlgorithmUri(algorithm);
+  if (!normalized) {
+    return { ok: false };
+  }
+  if (normalized === ENVELOPED_SIGNATURE_TRANSFORM) {
+    return {
+      ok: true,
+      value: stripSignatureElements(value)
+    };
+  }
+  if (REFERENCE_TRANSFORM_CANONICALIZATION_ALGORITHMS.has(normalized)) {
+    return {
+      ok: true,
+      value: canonicalizeXmlFragment(value)
+    };
+  }
+  return { ok: false };
+};
+
+const validateSignedInfoReferences = async (params: {
+  xml: string;
+  signedInfoXml: string;
+}): Promise<{
+  ok: boolean;
+  referenceCount: number;
+  reason: string | null;
+}> => {
+  const referenceBlocks = params.signedInfoXml.match(
+    /<(?:[a-zA-Z0-9_]+:)?Reference\b[\s\S]*?<\/(?:[a-zA-Z0-9_]+:)?Reference>/gi
+  );
+  if (!referenceBlocks || referenceBlocks.length === 0) {
+    return {
+      ok: false,
+      referenceCount: 0,
+      reason: "SignedInfo does not contain any Reference elements"
+    };
+  }
+
+  for (let index = 0; index < referenceBlocks.length; index += 1) {
+    const reference = referenceBlocks[index];
+    const referenceAttributes = readTagAttributesList(reference, "Reference")[0] ?? {};
+    const uri = referenceAttributes.URI ?? "";
+    const digestMethodAlgorithm = readTagAttributesList(reference, "DigestMethod")[0]?.Algorithm ?? null;
+    const digestAlgorithm = resolveDigestAlgorithm(digestMethodAlgorithm);
+    if (!digestAlgorithm) {
+      return {
+        ok: false,
+        referenceCount: referenceBlocks.length,
+        reason: `Reference[${index}] uses unsupported DigestMethod algorithm`
+      };
+    }
+
+    const digestValue = readTagValue(reference, "DigestValue")?.replace(/\s+/g, "") ?? null;
+    if (!digestValue) {
+      return {
+        ok: false,
+        referenceCount: referenceBlocks.length,
+        reason: `Reference[${index}] is missing DigestValue`
+      };
+    }
+
+    let targetXml = "";
+    if (!uri) {
+      targetXml = params.xml;
+    } else if (uri.startsWith("#")) {
+      const id = uri.slice(1);
+      if (!id) {
+        return {
+          ok: false,
+          referenceCount: referenceBlocks.length,
+          reason: `Reference[${index}] has an empty URI fragment`
+        };
+      }
+      const fragmentXml = findElementById(params.xml, id);
+      if (!fragmentXml) {
+        return {
+          ok: false,
+          referenceCount: referenceBlocks.length,
+          reason: `Reference[${index}] target URI '${uri}' cannot be resolved`
+        };
+      }
+      targetXml = fragmentXml;
+    } else {
+      return {
+        ok: false,
+        referenceCount: referenceBlocks.length,
+        reason: `Reference[${index}] uses unsupported URI '${uri}'`
+      };
+    }
+
+    const transforms = readTagAttributesList(reference, "Transform")
+      .map((attributes) => attributes.Algorithm)
+      .filter((algorithm): algorithm is string => Boolean(algorithm));
+
+    let transformed = targetXml;
+    for (const transformAlgorithm of transforms) {
+      const transformedResult = applyReferenceTransform(transformed, transformAlgorithm);
+      if (!transformedResult.ok) {
+        return {
+          ok: false,
+          referenceCount: referenceBlocks.length,
+          reason: `Reference[${index}] uses unsupported Transform algorithm '${transformAlgorithm}'`
+        };
+      }
+      transformed = transformedResult.value;
+    }
+
+    const normalizedInput = canonicalizeXmlFragment(transformed);
+    const computedDigest = new Uint8Array(
+      await crypto.subtle.digest(digestAlgorithm, toArrayBuffer(new TextEncoder().encode(normalizedInput)))
+    );
+
+    let expectedDigest: Uint8Array;
+    try {
+      expectedDigest = base64ToBytes(digestValue);
+    } catch {
+      return {
+        ok: false,
+        referenceCount: referenceBlocks.length,
+        reason: `Reference[${index}] DigestValue is not valid base64`
+      };
+    }
+
+    if (!bytesEqual(computedDigest, expectedDigest)) {
+      return {
+        ok: false,
+        referenceCount: referenceBlocks.length,
+        reason: `Reference[${index}] digest validation failed`
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    referenceCount: referenceBlocks.length,
+    reason: null
+  };
+};
 
 const resolveSignatureImportAlgorithm = (signatureMethodAlgorithm: string | null): {
   algorithm: RsaHashedImportParams;
@@ -277,6 +545,9 @@ export const verifySamlXmlSignature = async (params: {
       verified: false,
       signatureAlgorithm: null,
       canonicalizationAlgorithm: null,
+      referenceCount: 0,
+      referenceDigestsValid: null,
+      referenceValidationReason: null,
       reason: "XML signature verification is disabled"
     };
   }
@@ -289,6 +560,9 @@ export const verifySamlXmlSignature = async (params: {
       verified: false,
       signatureAlgorithm: null,
       canonicalizationAlgorithm: null,
+      referenceCount: 0,
+      referenceDigestsValid: null,
+      referenceValidationReason: null,
       reason: "Signature block is missing"
     };
   }
@@ -305,7 +579,28 @@ export const verifySamlXmlSignature = async (params: {
       verified: false,
       signatureAlgorithm: signatureMethodAlgorithm,
       canonicalizationAlgorithm,
+      referenceCount: 0,
+      referenceDigestsValid: null,
+      referenceValidationReason: null,
       reason: "SignedInfo or SignatureValue is missing"
+    };
+  }
+
+  const normalizedCanonicalizationAlgorithm = normalizeAlgorithmUri(canonicalizationAlgorithm);
+  if (
+    normalizedCanonicalizationAlgorithm &&
+    !SIGNED_INFO_CANONICALIZATION_ALGORITHMS.has(normalizedCanonicalizationAlgorithm)
+  ) {
+    return {
+      mode: params.mode,
+      attempted: true,
+      verified: false,
+      signatureAlgorithm: signatureMethodAlgorithm,
+      canonicalizationAlgorithm,
+      referenceCount: 0,
+      referenceDigestsValid: null,
+      referenceValidationReason: null,
+      reason: `Unsupported SignedInfo canonicalization algorithm '${canonicalizationAlgorithm}'`
     };
   }
 
@@ -317,6 +612,9 @@ export const verifySamlXmlSignature = async (params: {
       verified: false,
       signatureAlgorithm: signatureMethodAlgorithm,
       canonicalizationAlgorithm,
+      referenceCount: 0,
+      referenceDigestsValid: null,
+      referenceValidationReason: null,
       reason: "Unsupported SAML signature algorithm"
     };
   }
@@ -329,7 +627,28 @@ export const verifySamlXmlSignature = async (params: {
       verified: false,
       signatureAlgorithm: resolvedAlgorithm.uri,
       canonicalizationAlgorithm,
+      referenceCount: 0,
+      referenceDigestsValid: null,
+      referenceValidationReason: null,
       reason: "Configured certificate is empty or invalid"
+    };
+  }
+
+  const referenceValidation = await validateSignedInfoReferences({
+    xml: params.xml,
+    signedInfoXml
+  });
+  if (!referenceValidation.ok) {
+    return {
+      mode: params.mode,
+      attempted: true,
+      verified: false,
+      signatureAlgorithm: resolvedAlgorithm.uri,
+      canonicalizationAlgorithm,
+      referenceCount: referenceValidation.referenceCount,
+      referenceDigestsValid: false,
+      referenceValidationReason: referenceValidation.reason,
+      reason: referenceValidation.reason
     };
   }
 
@@ -356,6 +675,9 @@ export const verifySamlXmlSignature = async (params: {
       verified: isVerified,
       signatureAlgorithm: resolvedAlgorithm.uri,
       canonicalizationAlgorithm,
+      referenceCount: referenceValidation.referenceCount,
+      referenceDigestsValid: true,
+      referenceValidationReason: null,
       reason: isVerified ? null : "Signature verification failed"
     };
   } catch (error) {
@@ -365,6 +687,9 @@ export const verifySamlXmlSignature = async (params: {
       verified: false,
       signatureAlgorithm: resolvedAlgorithm.uri,
       canonicalizationAlgorithm,
+      referenceCount: referenceValidation.referenceCount,
+      referenceDigestsValid: true,
+      referenceValidationReason: null,
       reason: error instanceof Error ? error.message : "Signature verification failed unexpectedly"
     };
   }

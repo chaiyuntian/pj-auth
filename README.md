@@ -28,6 +28,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - D1-backed auth rate limiting for `/v1/auth/*` and `/v1/oauth/*`.
 - Demo UI + browser SDK script at `/demo` and `/sdk/pj-auth-client.js`.
 - Hosted auth UI + embeddable widget (`/hosted/sign-in`, `/hosted/sign-up`, `/sdk/pj-auth-widgets.js`).
+- Hosted enterprise console UI (`/hosted/enterprise`) for org diagnostics/SAML/domain/compliance/KMS/export operations.
 - SDK package stubs for browser/react/nextjs/server runtimes under `packages/`.
 - Built-in capability evolver loop for autonomous safe mutation cycles.
 
@@ -178,6 +179,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `GET /v1/admin/audit-logs` (`x-admin-api-key`)
 - `GET /hosted/sign-in` (Hosted UI)
 - `GET /hosted/sign-up` (Hosted UI)
+- `GET /hosted/enterprise` (Hosted enterprise admin console UI)
 - `GET /sdk/pj-auth-widgets.js` (Embeddable widget)
 
 ## Local Setup
@@ -194,6 +196,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 6. Open hosted auth UI:
    - `http://127.0.0.1:8787/hosted/sign-in`
    - `http://127.0.0.1:8787/hosted/sign-up`
+   - `http://127.0.0.1:8787/hosted/enterprise`
 
 ## Cloudflare Deployment (D1 + Worker)
 Fast path:
@@ -219,7 +222,7 @@ Manual path:
 6. Deploy:
    - `npm run deploy`
 7. Optional non-secret vars in `wrangler.toml` `[vars]`:
-   - `SAML_XMLSIG_MODE=required` to enforce cryptographic XML DSig verification at ACS (recommended for production IdPs)
+   - `SAML_XMLSIG_MODE=required` to enforce full XML DSig verification at ACS (signature + Reference digest checks, recommended for production IdPs)
 
 ## Verification/Reset Token Delivery
 - If `RESEND_API_KEY` + `EMAIL_FROM` are configured, emails are sent through Resend.
