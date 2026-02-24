@@ -24,6 +24,7 @@ COOKIE_DOMAIN = ""
 GOOGLE_DEFAULT_SCOPE = "openid email profile"
 EXPOSE_TEST_TOKENS = "false"
 EMAIL_FROM = "PajamaDot Auth <noreply@users.pajamadot.com>"
+SAML_XMLSIG_MODE = "optional"
 
 [[d1_databases]]
 binding = "DB"

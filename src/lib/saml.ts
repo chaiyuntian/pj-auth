@@ -54,6 +54,128 @@ const normalizeIsoLike = (value: string | null): string | null => {
   return new Date(parsed).toISOString();
 };
 
+const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer =>
+  bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+
+const base64ToBytes = (value: string): Uint8Array => {
+  const normalized = value.replace(/\s+/g, "");
+  const decoded = atob(normalized);
+  const bytes = new Uint8Array(decoded.length);
+  for (let index = 0; index < decoded.length; index += 1) {
+    bytes[index] = decoded.charCodeAt(index);
+  }
+  return bytes;
+};
+
+type Asn1Node = {
+  tag: number;
+  headerLength: number;
+  length: number;
+  start: number;
+  valueStart: number;
+  end: number;
+};
+
+const readAsn1Node = (bytes: Uint8Array, offset: number): Asn1Node => {
+  if (offset >= bytes.length) {
+    throw new Error("ASN.1 parse error: offset out of bounds");
+  }
+  const tag = bytes[offset];
+  let lengthByteIndex = offset + 1;
+  if (lengthByteIndex >= bytes.length) {
+    throw new Error("ASN.1 parse error: missing length");
+  }
+  const firstLengthByte = bytes[lengthByteIndex];
+  let length = 0;
+  let headerLength = 2;
+  if ((firstLengthByte & 0x80) === 0) {
+    length = firstLengthByte;
+  } else {
+    const count = firstLengthByte & 0x7f;
+    if (count < 1 || count > 4) {
+      throw new Error("ASN.1 parse error: unsupported length encoding");
+    }
+    headerLength = 2 + count;
+    lengthByteIndex += 1;
+    if (lengthByteIndex + count > bytes.length) {
+      throw new Error("ASN.1 parse error: length exceeds buffer");
+    }
+    for (let index = 0; index < count; index += 1) {
+      length = (length << 8) | bytes[lengthByteIndex + index];
+    }
+  }
+
+  const start = offset;
+  const valueStart = offset + headerLength;
+  const end = valueStart + length;
+  if (end > bytes.length) {
+    throw new Error("ASN.1 parse error: node exceeds buffer");
+  }
+  return {
+    tag,
+    headerLength,
+    length,
+    start,
+    valueStart,
+    end
+  };
+};
+
+const readAsn1Children = (bytes: Uint8Array, parent: Asn1Node): Asn1Node[] => {
+  const children: Asn1Node[] = [];
+  let cursor = parent.valueStart;
+  while (cursor < parent.end) {
+    const child = readAsn1Node(bytes, cursor);
+    children.push(child);
+    cursor = child.end;
+  }
+  if (cursor !== parent.end) {
+    throw new Error("ASN.1 parse error: child parsing misaligned");
+  }
+  return children;
+};
+
+const extractSpkiFromX509Certificate = (certificateDer: Uint8Array): Uint8Array => {
+  const root = readAsn1Node(certificateDer, 0);
+  if (root.tag !== 0x30) {
+    throw new Error("X.509 parse error: certificate root is not SEQUENCE");
+  }
+  const rootChildren = readAsn1Children(certificateDer, root);
+  if (rootChildren.length < 1) {
+    throw new Error("X.509 parse error: missing TBSCertificate");
+  }
+  const tbsCertificate = rootChildren[0];
+  if (tbsCertificate.tag !== 0x30) {
+    throw new Error("X.509 parse error: TBSCertificate is not SEQUENCE");
+  }
+  const tbsChildren = readAsn1Children(certificateDer, tbsCertificate);
+  if (tbsChildren.length < 6) {
+    throw new Error("X.509 parse error: TBSCertificate is truncated");
+  }
+
+  let index = 0;
+  if (tbsChildren[0].tag === 0xa0) {
+    index = 1;
+  }
+  const spkiIndex = index + 5;
+  const spkiNode = tbsChildren[spkiIndex];
+  if (!spkiNode || spkiNode.tag !== 0x30) {
+    throw new Error("X.509 parse error: SubjectPublicKeyInfo not found");
+  }
+  return certificateDer.slice(spkiNode.start, spkiNode.end);
+};
+
+export type SamlXmlSignatureValidationMode = "off" | "optional" | "required";
+
+export type SamlXmlSignatureVerification = {
+  mode: SamlXmlSignatureValidationMode;
+  attempted: boolean;
+  verified: boolean;
+  signatureAlgorithm: string | null;
+  canonicalizationAlgorithm: string | null;
+  reason: string | null;
+};
+
 export type SamlParsedResponse = {
   issuer: string | null;
   assertionIssuer: string | null;
@@ -75,6 +197,178 @@ export const normalizePemCertificate = (value: string): string =>
     .replace(/-----END CERTIFICATE-----/g, "")
     .replace(/\s+/g, "")
     .trim();
+
+const extractSignatureBlock = (xml: string): string | null => {
+  const match = /<(?:[a-zA-Z0-9_]+:)?Signature\b[\s\S]*?<\/(?:[a-zA-Z0-9_]+:)?Signature>/i.exec(xml);
+  return match?.[0] ?? null;
+};
+
+const extractSignedInfo = (signatureXml: string): string | null => {
+  const match =
+    /<(?:[a-zA-Z0-9_]+:)?SignedInfo\b[\s\S]*?<\/(?:[a-zA-Z0-9_]+:)?SignedInfo>/i.exec(signatureXml);
+  return match?.[0] ?? null;
+};
+
+const canonicalizeSignedInfo = (signedInfoXml: string): string =>
+  signedInfoXml
+    .replace(/^\s*<\?xml[^>]*\?>\s*/i, "")
+    .replace(/>\s+</g, "><")
+    .trim();
+
+const resolveSignatureImportAlgorithm = (signatureMethodAlgorithm: string | null): {
+  algorithm: RsaHashedImportParams;
+  uri: string | null;
+} | null => {
+  const uri = signatureMethodAlgorithm?.trim() || null;
+  if (!uri) {
+    return null;
+  }
+
+  const uriLower = uri.toLowerCase();
+  if (uriLower === "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256") {
+    return {
+      algorithm: {
+        name: "RSASSA-PKCS1-v1_5",
+        hash: "SHA-256"
+      },
+      uri
+    };
+  }
+  if (uriLower === "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384") {
+    return {
+      algorithm: {
+        name: "RSASSA-PKCS1-v1_5",
+        hash: "SHA-384"
+      },
+      uri
+    };
+  }
+  if (uriLower === "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512") {
+    return {
+      algorithm: {
+        name: "RSASSA-PKCS1-v1_5",
+        hash: "SHA-512"
+      },
+      uri
+    };
+  }
+  if (uriLower === "http://www.w3.org/2000/09/xmldsig#rsa-sha1") {
+    return {
+      algorithm: {
+        name: "RSASSA-PKCS1-v1_5",
+        hash: "SHA-1"
+      },
+      uri
+    };
+  }
+
+  return null;
+};
+
+export const verifySamlXmlSignature = async (params: {
+  xml: string;
+  certificatePem: string;
+  mode: SamlXmlSignatureValidationMode;
+}): Promise<SamlXmlSignatureVerification> => {
+  if (params.mode === "off") {
+    return {
+      mode: params.mode,
+      attempted: false,
+      verified: false,
+      signatureAlgorithm: null,
+      canonicalizationAlgorithm: null,
+      reason: "XML signature verification is disabled"
+    };
+  }
+
+  const signatureXml = extractSignatureBlock(params.xml);
+  if (!signatureXml) {
+    return {
+      mode: params.mode,
+      attempted: true,
+      verified: false,
+      signatureAlgorithm: null,
+      canonicalizationAlgorithm: null,
+      reason: "Signature block is missing"
+    };
+  }
+
+  const signedInfoXml = extractSignedInfo(signatureXml);
+  const signatureValue = readTagValue(signatureXml, "SignatureValue")?.replace(/\s+/g, "") ?? null;
+  const signatureMethodAlgorithm = readOpenTagAttributes(signatureXml, "SignatureMethod").Algorithm ?? null;
+  const canonicalizationAlgorithm = readOpenTagAttributes(signatureXml, "CanonicalizationMethod").Algorithm ?? null;
+
+  if (!signedInfoXml || !signatureValue) {
+    return {
+      mode: params.mode,
+      attempted: true,
+      verified: false,
+      signatureAlgorithm: signatureMethodAlgorithm,
+      canonicalizationAlgorithm,
+      reason: "SignedInfo or SignatureValue is missing"
+    };
+  }
+
+  const resolvedAlgorithm = resolveSignatureImportAlgorithm(signatureMethodAlgorithm);
+  if (!resolvedAlgorithm) {
+    return {
+      mode: params.mode,
+      attempted: true,
+      verified: false,
+      signatureAlgorithm: signatureMethodAlgorithm,
+      canonicalizationAlgorithm,
+      reason: "Unsupported SAML signature algorithm"
+    };
+  }
+
+  const normalizedCert = normalizePemCertificate(params.certificatePem);
+  if (!normalizedCert) {
+    return {
+      mode: params.mode,
+      attempted: true,
+      verified: false,
+      signatureAlgorithm: resolvedAlgorithm.uri,
+      canonicalizationAlgorithm,
+      reason: "Configured certificate is empty or invalid"
+    };
+  }
+
+  try {
+    const certificateDer = base64ToBytes(normalizedCert);
+    const spki = extractSpkiFromX509Certificate(certificateDer);
+    const cryptoKey = await crypto.subtle.importKey(
+      "spki",
+      toArrayBuffer(spki),
+      resolvedAlgorithm.algorithm,
+      false,
+      ["verify"]
+    );
+    const canonicalSignedInfo = canonicalizeSignedInfo(signedInfoXml);
+    const isVerified = await crypto.subtle.verify(
+      resolvedAlgorithm.algorithm,
+      cryptoKey,
+      toArrayBuffer(base64ToBytes(signatureValue)),
+      toArrayBuffer(new TextEncoder().encode(canonicalSignedInfo))
+    );
+    return {
+      mode: params.mode,
+      attempted: true,
+      verified: isVerified,
+      signatureAlgorithm: resolvedAlgorithm.uri,
+      canonicalizationAlgorithm,
+      reason: isVerified ? null : "Signature verification failed"
+    };
+  } catch (error) {
+    return {
+      mode: params.mode,
+      attempted: true,
+      verified: false,
+      signatureAlgorithm: resolvedAlgorithm.uri,
+      canonicalizationAlgorithm,
+      reason: error instanceof Error ? error.message : "Signature verification failed unexpectedly"
+    };
+  }
+};
 
 export const buildSamlSpMetadataXml = (params: {
   entityId: string;
@@ -208,8 +502,11 @@ export const validateParsedSamlResponse = (params: {
   expectedInResponseTo?: string | null;
   allowIdpInitiated: boolean;
   clockSkewSeconds?: number;
-}): { ok: true } | { ok: false; errors: string[] } => {
+  signatureValidationMode?: SamlXmlSignatureValidationMode;
+  signatureVerification?: SamlXmlSignatureVerification | null;
+}): { ok: true; warnings: string[] } | { ok: false; errors: string[] } => {
   const errors: string[] = [];
+  const warnings: string[] = [];
   const skewMs = (params.clockSkewSeconds ?? 120) * 1000;
 
   const issuer = params.parsed.assertionIssuer || params.parsed.issuer;
@@ -262,6 +559,25 @@ export const validateParsedSamlResponse = (params: {
     } else if (!params.parsed.embeddedCertificates.some((value) => value === expectedCert)) {
       errors.push("SAML embedded certificate does not match configured certificate");
     }
+
+    const mode = params.signatureValidationMode ?? "optional";
+    const signatureVerification = params.signatureVerification;
+    if (mode === "required") {
+      if (!signatureVerification?.verified) {
+        errors.push(
+          `SAML XML signature cryptographic verification failed${
+            signatureVerification?.reason ? `: ${signatureVerification.reason}` : ""
+          }`
+        );
+      }
+    } else if (
+      mode === "optional" &&
+      signatureVerification?.attempted &&
+      !signatureVerification.verified &&
+      signatureVerification.reason
+    ) {
+      warnings.push(`SAML XML signature was not cryptographically verified: ${signatureVerification.reason}`);
+    }
   }
 
   if (!params.parsed.nameId) {
@@ -275,7 +591,10 @@ export const validateParsedSamlResponse = (params: {
     };
   }
 
-  return { ok: true };
+  return {
+    ok: true,
+    warnings
+  };
 };
 
 export const pickSamlAttributeValue = (parsed: SamlParsedResponse, candidates: string[]): string | null => {

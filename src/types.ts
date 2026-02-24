@@ -20,6 +20,7 @@ export type EnvBindings = {
   RESEND_API_BASE_URL?: string;
   RESEND_API_KEY?: string;
   KMS_MASTER_KEY?: string;
+  SAML_XMLSIG_MODE?: string;
   JWT_SIGNING_KEY: string;
   ADMIN_API_KEY: string;
   OAUTH_GOOGLE_CLIENT_ID?: string;

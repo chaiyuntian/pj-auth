@@ -218,6 +218,8 @@ Manual path:
    - `npm run db:migrate:remote`
 6. Deploy:
    - `npm run deploy`
+7. Optional non-secret vars in `wrangler.toml` `[vars]`:
+   - `SAML_XMLSIG_MODE=required` to enforce cryptographic XML DSig verification at ACS (recommended for production IdPs)
 
 ## Verification/Reset Token Delivery
 - If `RESEND_API_KEY` + `EMAIL_FROM` are configured, emails are sent through Resend.
@@ -300,4 +302,5 @@ curl -X POST https://users.pajamadot.com/v1/auth/sign-up \
 - For passkeys, always use HTTPS/custom domain in production and monitor `auth.session_risk_detected` audit events.
 - Use organization policy `deny` rules carefully; they override both base role grants and `allow` policies.
 - Rotate SAML IdP certificates proactively and keep `requireSignedAssertions=true` for production connections.
+- Set `SAML_XMLSIG_MODE=required` in production once your IdP signatures validate end-to-end.
 - Treat org KMS keys as sensitive cryptographic material; rotate aliases regularly and keep `KMS_MASTER_KEY` separate from `JWT_SIGNING_KEY`.

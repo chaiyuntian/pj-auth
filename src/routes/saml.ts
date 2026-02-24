@@ -16,7 +16,9 @@ import {
   encodeSamlXmlToBase64,
   parseSamlResponseXml,
   pickSamlAttributeValue,
-  validateParsedSamlResponse
+  validateParsedSamlResponse,
+  verifySamlXmlSignature,
+  type SamlXmlSignatureValidationMode
 } from "../lib/saml";
 import { getAppUrl } from "../lib/config";
 import { appendQuery, publicUser } from "../lib/http";
@@ -68,6 +70,14 @@ const toPublicSamlConnection = (connection: SamlConnectionRow) => ({
   createdAt: connection.created_at,
   updatedAt: connection.updated_at
 });
+
+const resolveSamlXmlSigMode = (env: EnvBindings): SamlXmlSignatureValidationMode => {
+  const raw = env.SAML_XMLSIG_MODE?.trim().toLowerCase();
+  if (raw === "off" || raw === "optional" || raw === "required") {
+    return raw;
+  }
+  return "optional";
+};
 
 const resolveEmailFromAssertion = (params: {
   parsed: ReturnType<typeof parseSamlResponseXml>;
@@ -316,6 +326,12 @@ samlRoutes.post("/:connectionSlug/acs", async (context) => {
   }
 
   const parsed = parseSamlResponseXml(xml);
+  const xmlSigMode = resolveSamlXmlSigMode(context.env);
+  const signatureVerification = await verifySamlXmlSignature({
+    xml,
+    certificatePem: connection.x509_cert_pem,
+    mode: xmlSigMode
+  });
 
   let redirectTo: string | null = null;
   let expectedInResponseTo: string | null = null;
@@ -344,7 +360,9 @@ samlRoutes.post("/:connectionSlug/acs", async (context) => {
     requireSignedAssertions: Boolean(connection.require_signed_assertions),
     certificatePem: connection.x509_cert_pem,
     expectedInResponseTo,
-    allowIdpInitiated: Boolean(connection.allow_idp_initiated)
+    allowIdpInitiated: Boolean(connection.allow_idp_initiated),
+    signatureValidationMode: xmlSigMode,
+    signatureVerification
   });
 
   if (!validation.ok) {
@@ -461,7 +479,16 @@ samlRoutes.post("/:connectionSlug/acs", async (context) => {
     metadataJson: JSON.stringify({
       organizationId: connection.organization_id,
       samlConnectionId: connection.id,
-      issuer: parsed.assertionIssuer || parsed.issuer || null
+      issuer: parsed.assertionIssuer || parsed.issuer || null,
+      xmlSignature: {
+        mode: signatureVerification.mode,
+        attempted: signatureVerification.attempted,
+        verified: signatureVerification.verified,
+        reason: signatureVerification.reason,
+        signatureAlgorithm: signatureVerification.signatureAlgorithm,
+        canonicalizationAlgorithm: signatureVerification.canonicalizationAlgorithm
+      },
+      validationWarnings: validation.warnings
     })
   });
 
@@ -497,6 +524,7 @@ samlRoutes.post("/:connectionSlug/acs", async (context) => {
       stepUpRecommended: sessionRisk.stepUpRecommended,
       autoRevokedOtherSessions: sessionRisk.autoRevokedOtherSessions,
       revokedCount: sessionRisk.revokedCount
-    }
+    },
+    samlValidationWarnings: validation.warnings
   });
 });

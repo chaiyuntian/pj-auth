@@ -2,6 +2,32 @@
   "version": 1,
   "capsules": [
     {
+      "id": "run-e2e-smoke-121ea97ae628",
+      "geneId": "run-e2e-smoke",
+      "target": "src",
+      "summary": "Successful run-e2e-smoke cycle",
+      "createdAt": "2026-02-24T20:05:51.693Z",
+      "validations": [
+        {
+          "command": "npm run e2e:smoke",
+          "code": 0
+        }
+      ]
+    },
+    {
+      "id": "run-e2e-smoke-0a11c80b78d2",
+      "geneId": "run-e2e-smoke",
+      "target": "src",
+      "summary": "Successful run-e2e-smoke cycle",
+      "createdAt": "2026-02-24T20:05:27.965Z",
+      "validations": [
+        {
+          "command": "npm run e2e:smoke",
+          "code": 0
+        }
+      ]
+    },
+    {
       "id": "run-e2e-smoke-6bba1cd389f7",
       "geneId": "run-e2e-smoke",
       "target": "src",

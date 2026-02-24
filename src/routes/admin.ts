@@ -181,6 +181,15 @@ adminRoutes.get("/system/status", async (context) => {
     turnstile: {
       enabled: turnstile.enabled,
       configured: Boolean(turnstile.secretKey)
+    },
+    saml: {
+      xmlSignatureMode: (() => {
+        const mode = context.env.SAML_XMLSIG_MODE?.trim().toLowerCase();
+        if (mode === "off" || mode === "optional" || mode === "required") {
+          return mode;
+        }
+        return "optional";
+      })()
     }
   });
 });
