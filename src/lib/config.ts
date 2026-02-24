@@ -17,12 +17,21 @@ export const getAccessTokenTtlSeconds = (env: EnvBindings): number =>
 export const getRefreshTokenTtlSeconds = (env: EnvBindings): number =>
   parsePositiveInt(env.REFRESH_TOKEN_TTL_SECONDS, 30 * 24 * 60 * 60);
 
+export const getEmailVerificationTtlSeconds = (env: EnvBindings): number =>
+  parsePositiveInt(env.EMAIL_VERIFICATION_TTL_SECONDS, 15 * 60);
+
+export const getPasswordResetTtlSeconds = (env: EnvBindings): number =>
+  parsePositiveInt(env.PASSWORD_RESET_TTL_SECONDS, 15 * 60);
+
 export const getCookieName = (env: EnvBindings): string => env.COOKIE_NAME?.trim() || "pj_auth_refresh";
 
 export const getCookieDomain = (env: EnvBindings): string | null => {
   const value = env.COOKIE_DOMAIN?.trim();
   return value ? value : null;
 };
+
+export const shouldExposeTestTokens = (env: EnvBindings): boolean =>
+  (env.EXPOSE_TEST_TOKENS?.trim().toLowerCase() ?? "") === "true";
 
 export const getAppUrl = (env: EnvBindings, request: Request): string => {
   const configured = env.APP_URL?.trim();

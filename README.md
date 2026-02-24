@@ -5,6 +5,9 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 ## Current Capabilities
 - Email/password sign-up + sign-in.
 - Access token + rotating refresh token session flow.
+- Email verification flow (`start` + `confirm`) with one-time tokens.
+- Password reset flow (`start` + `confirm`) with one-time tokens.
+- Session management APIs (list sessions, revoke one, revoke others, revoke all).
 - Google OAuth (`/v1/oauth/google/start`, `/v1/oauth/google/callback`).
 - Provider config management via admin API key.
 - D1-backed user/session/oauth state.
@@ -22,12 +25,22 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `src/routes/admin.ts`: OAuth provider settings + stats.
 - `src/routes/demo.ts`: end-to-end browser demo and SDK script.
 - `migrations/0001_init.sql`: initial D1 schema.
+- `migrations/0002_verification_indexes.sql`: token/session indexes.
 - `ROADMAP.md`: parity plan toward full Clerk-like surface.
 
 ## API Summary
 - `POST /v1/auth/sign-up`
 - `POST /v1/auth/sign-in`
 - `POST /v1/auth/token/refresh`
+- `POST /v1/auth/email-verification/start` (Bearer)
+- `POST /v1/auth/email-verification/confirm`
+- `GET /v1/auth/email-verification/confirm?token=...`
+- `POST /v1/auth/password-reset/start`
+- `POST /v1/auth/password-reset/confirm`
+- `GET /v1/auth/sessions` (Bearer)
+- `POST /v1/auth/sessions/:sessionId/revoke` (Bearer)
+- `POST /v1/auth/sessions/revoke-others` (Bearer)
+- `POST /v1/auth/sessions/revoke-all` (Bearer)
 - `POST /v1/auth/sign-out`
 - `GET /v1/auth/me`
 - `GET /v1/oauth/google/start`
@@ -64,6 +77,11 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
    - `npm run db:migrate:remote`
 6. Deploy:
    - `npm run deploy`
+
+## Verification/Reset Token Delivery
+- Current implementation logs generated verification/reset links to Worker logs.
+- For local/dev testing, set `EXPOSE_TEST_TOKENS=true` in `.dev.vars` to include one-time tokens in API responses.
+- Keep `EXPOSE_TEST_TOKENS=false` in production.
 
 ## Configure Google OAuth
 Use one of these approaches:
@@ -108,4 +126,4 @@ curl -X POST https://users.pajamadot.com/v1/auth/sign-up \
 - Use long, random `JWT_SIGNING_KEY` and rotate periodically.
 - Never expose `ADMIN_API_KEY` client-side.
 - Restrict CORS origins for production.
-- Add email verification and password reset before production launch (tracked in `ROADMAP.md`).
+- Add real outbound email/SMS delivery integration before production launch.

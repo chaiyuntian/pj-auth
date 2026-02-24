@@ -3,8 +3,11 @@ export type EnvBindings = {
   APP_URL?: string;
   ACCESS_TOKEN_TTL_SECONDS?: string;
   REFRESH_TOKEN_TTL_SECONDS?: string;
+  EMAIL_VERIFICATION_TTL_SECONDS?: string;
+  PASSWORD_RESET_TTL_SECONDS?: string;
   COOKIE_NAME?: string;
   COOKIE_DOMAIN?: string;
+  EXPOSE_TEST_TOKENS?: string;
   JWT_SIGNING_KEY: string;
   ADMIN_API_KEY: string;
   OAUTH_GOOGLE_CLIENT_ID?: string;

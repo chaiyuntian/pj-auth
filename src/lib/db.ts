@@ -49,6 +49,17 @@ export type OAuthAccountRow = {
   updated_at: string;
 };
 
+export type VerificationCodeRow = {
+  id: string;
+  user_id: string | null;
+  email: string;
+  purpose: string;
+  code_hash: string;
+  expires_at: string;
+  used_at: string | null;
+  created_at: string;
+};
+
 type OAuthStateRow = {
   state: string;
   provider: string;
@@ -191,6 +202,72 @@ export const revokeSession = async (db: D1Database, sessionId: string): Promise<
     .prepare(`UPDATE sessions SET revoked_at = ?, last_active_at = ? WHERE id = ?`)
     .bind(nowIso(), nowIso(), sessionId)
     .run();
+};
+
+export const listUserSessions = async (db: D1Database, userId: string): Promise<SessionRow[]> => {
+  const result = await db
+    .prepare(
+      `SELECT id, user_id, refresh_token_hash, user_agent, ip_address, expires_at, last_active_at, revoked_at, created_at
+       FROM sessions
+       WHERE user_id = ?
+       ORDER BY datetime(created_at) DESC`
+    )
+    .bind(userId)
+    .all<SessionRow>();
+  return result.results ?? [];
+};
+
+export const revokeUserSession = async (
+  db: D1Database,
+  params: {
+    userId: string;
+    sessionId: string;
+  }
+): Promise<boolean> => {
+  const result = await db
+    .prepare(
+      `UPDATE sessions
+       SET revoked_at = ?, last_active_at = ?
+       WHERE id = ? AND user_id = ? AND revoked_at IS NULL`
+    )
+    .bind(nowIso(), nowIso(), params.sessionId, params.userId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+};
+
+export const revokeOtherUserSessions = async (
+  db: D1Database,
+  params: {
+    userId: string;
+    exceptSessionId: string;
+  }
+): Promise<number> => {
+  const result = await db
+    .prepare(
+      `UPDATE sessions
+       SET revoked_at = ?, last_active_at = ?
+       WHERE user_id = ? AND id <> ? AND revoked_at IS NULL`
+    )
+    .bind(nowIso(), nowIso(), params.userId, params.exceptSessionId)
+    .run();
+  return result.meta.changes ?? 0;
+};
+
+export const revokeAllUserSessions = async (
+  db: D1Database,
+  params: {
+    userId: string;
+  }
+): Promise<number> => {
+  const result = await db
+    .prepare(
+      `UPDATE sessions
+       SET revoked_at = ?, last_active_at = ?
+       WHERE user_id = ? AND revoked_at IS NULL`
+    )
+    .bind(nowIso(), nowIso(), params.userId)
+    .run();
+  return result.meta.changes ?? 0;
 };
 
 export const upsertGoogleProvider = async (
@@ -384,6 +461,136 @@ export const updateUserProfile = async (
       params.userId
     )
     .run();
+};
+
+export const updateUserEmailVerification = async (
+  db: D1Database,
+  params: {
+    userId: string;
+    emailVerified: boolean;
+  }
+): Promise<void> => {
+  await db
+    .prepare(
+      `UPDATE users
+       SET email_verified = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(params.emailVerified ? 1 : 0, nowIso(), params.userId)
+    .run();
+};
+
+export const updateUserPassword = async (
+  db: D1Database,
+  params: {
+    userId: string;
+    passwordHash: string;
+    passwordSalt: string;
+  }
+): Promise<void> => {
+  await db
+    .prepare(
+      `UPDATE users
+       SET password_hash = ?, password_salt = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(params.passwordHash, params.passwordSalt, nowIso(), params.userId)
+    .run();
+};
+
+export const invalidateVerificationCodes = async (
+  db: D1Database,
+  params: {
+    purpose: string;
+    userId?: string;
+    email?: string;
+  }
+): Promise<number> => {
+  const now = nowIso();
+  if (params.userId) {
+    const result = await db
+      .prepare(
+        `UPDATE verification_codes
+         SET used_at = ?
+         WHERE purpose = ? AND user_id = ? AND used_at IS NULL`
+      )
+      .bind(now, params.purpose, params.userId)
+      .run();
+    return result.meta.changes ?? 0;
+  }
+  if (params.email) {
+    const result = await db
+      .prepare(
+        `UPDATE verification_codes
+         SET used_at = ?
+         WHERE purpose = ? AND email = ? AND used_at IS NULL`
+      )
+      .bind(now, params.purpose, normalizeEmail(params.email))
+      .run();
+    return result.meta.changes ?? 0;
+  }
+  return 0;
+};
+
+export const createVerificationCode = async (
+  db: D1Database,
+  params: {
+    id: string;
+    userId?: string | null;
+    email: string;
+    purpose: string;
+    codeHash: string;
+    expiresAt: string;
+  }
+): Promise<void> => {
+  await db
+    .prepare(
+      `INSERT INTO verification_codes (
+        id, user_id, email, purpose, code_hash, expires_at, used_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`
+    )
+    .bind(
+      params.id,
+      params.userId ?? null,
+      normalizeEmail(params.email),
+      params.purpose,
+      params.codeHash,
+      params.expiresAt,
+      nowIso()
+    )
+    .run();
+};
+
+export const consumeVerificationCodeByHash = async (
+  db: D1Database,
+  params: {
+    purpose: string;
+    codeHash: string;
+  }
+): Promise<VerificationCodeRow | null> => {
+  const row = await db
+    .prepare(
+      `SELECT id, user_id, email, purpose, code_hash, expires_at, used_at, created_at
+       FROM verification_codes
+       WHERE purpose = ? AND code_hash = ?`
+    )
+    .bind(params.purpose, params.codeHash)
+    .first<VerificationCodeRow>();
+
+  if (!row || row.used_at || Date.parse(row.expires_at) <= Date.now()) {
+    return null;
+  }
+
+  const result = await db
+    .prepare(`UPDATE verification_codes SET used_at = ? WHERE id = ? AND used_at IS NULL`)
+    .bind(nowIso(), row.id)
+    .run();
+
+  if ((result.meta.changes ?? 0) === 0) {
+    return null;
+  }
+
+  return row;
 };
 
 export const writeAuditLog = async (

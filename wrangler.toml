@@ -10,9 +10,12 @@ routes = [
 [vars]
 ACCESS_TOKEN_TTL_SECONDS = "900"
 REFRESH_TOKEN_TTL_SECONDS = "2592000"
+EMAIL_VERIFICATION_TTL_SECONDS = "900"
+PASSWORD_RESET_TTL_SECONDS = "900"
 COOKIE_NAME = "pj_auth_refresh"
 COOKIE_DOMAIN = ""
 GOOGLE_DEFAULT_SCOPE = "openid email profile"
+EXPOSE_TEST_TOKENS = "false"
 
 [[d1_databases]]
 binding = "DB"
