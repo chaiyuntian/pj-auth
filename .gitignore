@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+.env
+.dev.vars
+.prod.secrets.psd1
+dist/
+coverage/
+*.log
