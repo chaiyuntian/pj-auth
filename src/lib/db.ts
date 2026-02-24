@@ -176,6 +176,16 @@ export const findActiveSessionByRefreshTokenHash = async (
     .bind(refreshTokenHash)
     .first<SessionRow>();
 
+export const findSessionById = async (db: D1Database, sessionId: string): Promise<SessionRow | null> =>
+  db
+    .prepare(
+      `SELECT id, user_id, refresh_token_hash, user_agent, ip_address, expires_at, last_active_at, revoked_at, created_at
+       FROM sessions
+       WHERE id = ?`
+    )
+    .bind(sessionId)
+    .first<SessionRow>();
+
 export const revokeSession = async (db: D1Database, sessionId: string): Promise<void> => {
   await db
     .prepare(`UPDATE sessions SET revoked_at = ?, last_active_at = ? WHERE id = ?`)

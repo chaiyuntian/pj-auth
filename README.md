@@ -89,7 +89,7 @@ Use one of these approaches:
 2. In `wrangler.toml`, add:
 ```toml
 routes = [
-  { pattern = "users.pajamadot.com/*", custom_domain = true }
+  { pattern = "users.pajamadot.com", custom_domain = true }
 ]
 ```
 3. Deploy again:

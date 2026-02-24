@@ -1,6 +1,7 @@
 import { fromBase64Url, randomToken, toBase64Url, toBytes } from "./encoding";
 
-const HASH_ITERATIONS = 210_000;
+// Cloudflare Workers PBKDF2 currently supports up to 100000 iterations.
+const HASH_ITERATIONS = 100_000;
 const HASH_LENGTH = 32;
 
 const importPasswordKey = async (password: string): Promise<CryptoKey> =>

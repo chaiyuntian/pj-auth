@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { EnvBindings } from "../types";
 import { getGoogleProviderConfig, upsertGoogleProvider, writeAuditLog } from "../lib/db";
 import { requireAdminApiKey } from "../middleware/require-admin";
+import { readJsonBody } from "../lib/request";
 
 const updateGoogleProviderSchema = z.object({
   enabled: z.boolean().optional(),
@@ -28,7 +29,7 @@ adminRoutes.get("/oauth/providers/google", async (context) => {
 });
 
 adminRoutes.put("/oauth/providers/google", async (context) => {
-  const payload = await context.req.json().catch(() => null);
+  const payload = await readJsonBody(context.req.raw);
   const parsed = updateGoogleProviderSchema.safeParse(payload);
   if (!parsed.success) {
     return context.json(

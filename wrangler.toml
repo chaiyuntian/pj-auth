@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2026-02-24"
 workers_dev = true
 
+routes = [
+  { pattern = "users.pajamadot.com", custom_domain = true }
+]
+
 [vars]
 APP_URL = "http://127.0.0.1:8787"
 ACCESS_TOKEN_TTL_SECONDS = "900"
@@ -14,10 +18,5 @@ GOOGLE_DEFAULT_SCOPE = "openid email profile"
 [[d1_databases]]
 binding = "DB"
 database_name = "pj-auth-db"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "104c25c8-4ffe-487c-9a79-7edc4a6dacaf"
 migrations_dir = "migrations"
-
-# Add this after validating Cloudflare zone ownership:
-# routes = [
-#   { pattern = "users.pajamadot.com/*", custom_domain = true }
-# ]

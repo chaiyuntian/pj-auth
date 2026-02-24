@@ -7,6 +7,7 @@ import { clearRefreshTokenCookie, readRefreshTokenCookie, setRefreshTokenCookie 
 import { createUser, findUserByEmail, findUserById, revokeSession, writeAuditLog } from "../lib/db";
 import { publicUser } from "../lib/http";
 import { requireAuth } from "../middleware/require-auth";
+import { readJsonBody } from "../lib/request";
 
 const signUpSchema = z.object({
   email: z.string().email().min(3).max(320),
@@ -40,7 +41,7 @@ export const authRoutes = new Hono<{
 }>();
 
 authRoutes.post("/sign-up", async (context) => {
-  const payload = await context.req.json().catch(() => null);
+  const payload = await readJsonBody(context.req.raw);
   const parsed = signUpSchema.safeParse(payload);
   if (!parsed.success) {
     return context.json(invalidBody(parsed.error.issues), 400);
@@ -112,7 +113,7 @@ authRoutes.post("/sign-up", async (context) => {
 });
 
 authRoutes.post("/sign-in", async (context) => {
-  const payload = await context.req.json().catch(() => null);
+  const payload = await readJsonBody(context.req.raw);
   const parsed = signInSchema.safeParse(payload);
   if (!parsed.success) {
     return context.json(invalidBody(parsed.error.issues), 400);
@@ -175,7 +176,7 @@ authRoutes.post("/sign-in", async (context) => {
 });
 
 authRoutes.post("/token/refresh", async (context) => {
-  const payload = await context.req.json().catch(() => ({}));
+  const payload = (await readJsonBody(context.req.raw)) ?? {};
   const parsed = refreshSchema.safeParse(payload);
   if (!parsed.success) {
     return context.json(invalidBody(parsed.error.issues), 400);

@@ -29,12 +29,17 @@ if ($ApplyRoute) {
   $content = Get-Content $wranglerPath -Raw
   if ($content -notmatch 'routes\s*=\s*\[') {
     $routeBlock = @"
-
 routes = [
-  { pattern = "$CustomDomain/*", custom_domain = true }
+  { pattern = "$CustomDomain", custom_domain = true }
 ]
+
 "@
-    Set-Content $wranglerPath ($content.TrimEnd() + $routeBlock)
+    if ($content -match 'workers_dev\s*=\s*(true|false)\s*') {
+      $updated = [regex]::Replace($content, 'workers_dev\s*=\s*(true|false)\s*', { param($m) "$($m.Value)`r`n`r`n$routeBlock" }, 1)
+      Set-Content $wranglerPath $updated
+    } else {
+      Set-Content $wranglerPath ($routeBlock + $content)
+    }
     Write-Host "Added custom domain route for $CustomDomain."
   } else {
     Write-Host "routes block already exists; skipped automatic route patch."

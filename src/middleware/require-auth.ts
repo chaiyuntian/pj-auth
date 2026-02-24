@@ -1,6 +1,8 @@
 import { createMiddleware } from "hono/factory";
 import type { EnvBindings } from "../types";
 import { authenticateAccessToken, parseBearerToken } from "../lib/auth";
+import { findSessionById } from "../lib/db";
+import { isIsoExpired } from "../lib/time";
 
 export const requireAuth = createMiddleware<{
   Bindings: EnvBindings;
@@ -18,6 +20,19 @@ export const requireAuth = createMiddleware<{
         error: {
           code: "UNAUTHORIZED",
           message: "A valid Bearer access token is required"
+        }
+      },
+      401
+    );
+  }
+
+  const session = await findSessionById(context.env.DB, auth.sessionId);
+  if (!session || session.revoked_at || isIsoExpired(session.expires_at) || session.user_id !== auth.userId) {
+    return context.json(
+      {
+        error: {
+          code: "SESSION_INVALID",
+          message: "Session is revoked or expired"
         }
       },
       401
