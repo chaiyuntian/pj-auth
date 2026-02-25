@@ -10,6 +10,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - Session management APIs (list sessions, revoke one, revoke others, revoke all).
 - Organizations and teams with role-based memberships (`owner/admin/member`, `maintainer/member`).
 - Organization invitation flow (create/list/revoke/accept) with hosted sign-in invite link support.
+- Organization invitation resend + expiration extension flow for controlled onboarding.
 - Fine-grained organization policy engine (`allow/deny` rules by user/role/team/service account).
 - Personal API keys and organization service accounts with scoped machine keys.
 - Organization webhooks with signed delivery logs and retry endpoint.
@@ -119,6 +120,8 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `GET /v1/orgs/:orgId/invitations` (Bearer)
 - `POST /v1/orgs/:orgId/invitations` (Bearer)
 - `POST /v1/orgs/:orgId/invitations/:invitationId/revoke` (Bearer)
+- `POST /v1/orgs/:orgId/invitations/:invitationId/resend` (Bearer)
+- `POST /v1/orgs/:orgId/invitations/:invitationId/extend` (Bearer)
 - `GET /v1/orgs/:orgId/teams` (Bearer)
 - `POST /v1/orgs/:orgId/teams` (Bearer)
 - `GET /v1/orgs/:orgId/teams/:teamId/members` (Bearer)
@@ -182,6 +185,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `PUT /v1/admin/oauth/providers/google` (`x-admin-api-key`)
 - `GET /v1/admin/stats` (`x-admin-api-key`)
 - `GET /v1/admin/system/status` (`x-admin-api-key`)
+- `GET /v1/admin/saml/signature-health` (`x-admin-api-key`)
 - `POST /v1/admin/webhooks/retry` (`x-admin-api-key`)
 - `GET /v1/admin/audit-logs` (`x-admin-api-key`)
 - `GET /hosted/sign-in` (Hosted UI)

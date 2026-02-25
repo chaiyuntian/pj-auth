@@ -542,6 +542,7 @@ const enterpriseHostedPage = (params: { origin: string }): string => `<!doctype 
           <div class="row">
             <button id="btnDiagnostics">Diagnostics</button>
             <button id="btnAdminStatus" class="alt">Admin Status</button>
+            <button id="btnSamlSigHealth" class="alt">SAML Sig Health</button>
           </div>
         </article>
 
@@ -580,6 +581,38 @@ const enterpriseHostedPage = (params: { origin: string }): string => `<!doctype 
           </label>
           <div class="row">
             <button id="btnCreateRoute">Create Domain Route</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <h3>Invitations</h3>
+          <div class="row">
+            <button id="btnListInvitations" class="alt">List</button>
+          </div>
+          <label>Email <input id="inviteEmail" type="email" placeholder="member@example.com" /></label>
+          <label>Role
+            <select id="inviteRole">
+              <option value="member">member</option>
+              <option value="admin">admin</option>
+              <option value="owner">owner</option>
+            </select>
+          </label>
+          <label>Expires (hours)
+            <input id="inviteExpiresHours" type="number" min="1" max="720" value="168" />
+          </label>
+          <div class="row">
+            <button id="btnCreateInvitation">Create Invitation</button>
+          </div>
+          <label>Invitation ID
+            <input id="inviteActionId" type="text" placeholder="invitation uuid" />
+          </label>
+          <label>Resend/Extend Hours (optional)
+            <input id="inviteResendExpiresHours" type="number" min="1" max="720" placeholder="e.g. 168" />
+          </label>
+          <div class="row">
+            <button id="btnResendInvitation" class="alt">Resend</button>
+            <button id="btnExtendInvitation" class="alt">Extend</button>
+            <button id="btnRevokeInvitation" class="danger">Revoke</button>
           </div>
         </article>
 
@@ -670,6 +703,10 @@ const enterpriseHostedPage = (params: { origin: string }): string => `<!doctype 
 
         const token = () => tokenInput.value.trim();
         const selectedOrgId = () => orgSelect.value.trim();
+        const parseOptionalInt = (value) => {
+          const parsed = Number.parseInt((value || "").trim(), 10);
+          return Number.isFinite(parsed) ? parsed : undefined;
+        };
 
         const request = async (path, options = {}) => {
           const {
@@ -765,6 +802,13 @@ const enterpriseHostedPage = (params: { origin: string }): string => `<!doctype 
           print("admin-status", await request("/v1/admin/system/status", { auth: false, admin: true }));
         });
 
+        bind("btnSamlSigHealth", async () => {
+          print(
+            "admin-saml-signature-health",
+            await request("/v1/admin/saml/signature-health?hours=24", { auth: false, admin: true })
+          );
+        });
+
         bind("btnListSaml", async () => {
           print("saml-connections", await request(withOrg("/saml/connections"), { auth: true }));
         });
@@ -800,6 +844,74 @@ const enterpriseHostedPage = (params: { origin: string }): string => `<!doctype 
           print(
             "create-domain-route",
             await request(withOrg("/domain-routes"), { method: "POST", auth: true, body: payload })
+          );
+        });
+
+        bind("btnListInvitations", async () => {
+          print("invitations", await request(withOrg("/invitations"), { auth: true }));
+        });
+
+        bind("btnCreateInvitation", async () => {
+          const expiresInHours = parseOptionalInt(document.getElementById("inviteExpiresHours").value);
+          const payload = {
+            email: document.getElementById("inviteEmail").value.trim(),
+            role: document.getElementById("inviteRole").value,
+            expiresInHours: expiresInHours || undefined
+          };
+          print(
+            "create-invitation",
+            await request(withOrg("/invitations"), { method: "POST", auth: true, body: payload })
+          );
+        });
+
+        bind("btnResendInvitation", async () => {
+          const invitationId = document.getElementById("inviteActionId").value.trim();
+          if (!invitationId) {
+            throw new Error("Invitation ID is required");
+          }
+          const expiresInHours = parseOptionalInt(document.getElementById("inviteResendExpiresHours").value);
+          const body = expiresInHours ? { expiresInHours } : {};
+          print(
+            "resend-invitation",
+            await request(withOrg("/invitations/" + encodeURIComponent(invitationId) + "/resend"), {
+              method: "POST",
+              auth: true,
+              body
+            })
+          );
+        });
+
+        bind("btnExtendInvitation", async () => {
+          const invitationId = document.getElementById("inviteActionId").value.trim();
+          if (!invitationId) {
+            throw new Error("Invitation ID is required");
+          }
+          const expiresInHours = parseOptionalInt(document.getElementById("inviteResendExpiresHours").value);
+          if (!expiresInHours) {
+            throw new Error("Resend/Extend Hours is required for extension");
+          }
+          print(
+            "extend-invitation",
+            await request(withOrg("/invitations/" + encodeURIComponent(invitationId) + "/extend"), {
+              method: "POST",
+              auth: true,
+              body: { expiresInHours }
+            })
+          );
+        });
+
+        bind("btnRevokeInvitation", async () => {
+          const invitationId = document.getElementById("inviteActionId").value.trim();
+          if (!invitationId) {
+            throw new Error("Invitation ID is required");
+          }
+          print(
+            "revoke-invitation",
+            await request(withOrg("/invitations/" + encodeURIComponent(invitationId) + "/revoke"), {
+              method: "POST",
+              auth: true,
+              body: {}
+            })
           );
         });
 

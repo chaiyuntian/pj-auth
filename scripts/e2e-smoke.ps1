@@ -1,6 +1,7 @@
 param(
   [string]$BaseUrl = "https://users.pajamadot.com",
-  [string]$Password = "Passw0rd123!"
+  [string]$Password = "Passw0rd123!",
+  [string]$AdminApiKey = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,6 +63,14 @@ Write-Host "Running health check against $BaseUrl"
 $health = Invoke-RestMethod -Method Get -Uri "$BaseUrl/healthz"
 if (-not $health.ok) {
   throw "Health check failed"
+}
+
+if ($AdminApiKey) {
+  Write-Host "Checking admin SAML signature diagnostics"
+  $sigHealth = Invoke-RestMethod -Method Get -Uri "$BaseUrl/v1/admin/saml/signature-health?hours=1&limit=200" -Headers @{ "x-admin-api-key" = $AdminApiKey }
+  if ($null -eq $sigHealth.totalEvents -or $null -eq $sigHealth.recommendation) {
+    throw "Admin SAML signature diagnostics endpoint failed"
+  }
 }
 
 Write-Host "Loading hosted enterprise console"
@@ -208,6 +217,14 @@ if (-not $invite.invitation.id) {
   throw "Organization invitation creation failed"
 }
 $inviteId = $invite.invitation.id
+
+Write-Host "Resending organization invitation with extension"
+$resendInvite = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/orgs/$orgId/invitations/$inviteId/resend" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body (@{
+  expiresInHours = 48
+} | ConvertTo-Json -Compress)
+if (-not $resendInvite.invitation.id -or $resendInvite.invitation.id -ne $inviteId) {
+  throw "Invitation resend failed"
+}
 
 Write-Host "Listing pending invitations for invited user"
 $myInvites = Invoke-RestMethod -Method Get -Uri "$BaseUrl/v1/orgs/invitations" -Headers @{ Authorization = "Bearer $token2" }

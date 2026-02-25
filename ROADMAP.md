@@ -21,6 +21,7 @@ Build a Cloudflare-native auth platform that converges toward Clerk-like functio
 - [x] Multi-session management endpoints (list/revoke per device).
 - [x] Organizations/teams and memberships.
 - [x] Organization invitations (issue/revoke/accept flow).
+- [x] Invitation lifecycle hardening (resend + expiration extension + hosted invite acceptance).
 - [x] API keys and service account auth flows.
 
 ## Phase 2: Advanced Controls
@@ -46,3 +47,4 @@ Build a Cloudflare-native auth platform that converges toward Clerk-like functio
 ## Phase 5: Hardening
 - [x] XML DSig cryptographic signature verification path for SAML assertions with configurable enforcement (`off|optional|required`).
 - [x] XML DSig reference digest validation (URI fragment resolution, digest method checks, transform processing) with strict fail-closed behavior in `required` mode.
+- [x] SAML strict-mode rollout diagnostics endpoint for signature health analysis (`/v1/admin/saml/signature-health`).

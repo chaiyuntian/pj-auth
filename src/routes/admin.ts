@@ -15,6 +15,69 @@ const updateGoogleProviderSchema = z.object({
   scope: z.string().min(3).max(600).optional()
 });
 
+type SamlSignatureAuditRow = {
+  metadata_json: string | null;
+  created_at: string;
+};
+
+type ParsedSamlSignatureAudit = {
+  mode: string | null;
+  attempted: boolean | null;
+  verified: boolean | null;
+  reason: string | null;
+  signatureAlgorithm: string | null;
+  canonicalizationAlgorithm: string | null;
+  referenceCount: number | null;
+  referenceDigestsValid: boolean | null;
+  referenceValidationReason: string | null;
+};
+
+const parseSamlSignatureAudit = (metadataJson: string | null): ParsedSamlSignatureAudit | null => {
+  if (!metadataJson) {
+    return null;
+  }
+  try {
+    const metadata = JSON.parse(metadataJson) as {
+      xmlSignature?: {
+        mode?: unknown;
+        attempted?: unknown;
+        verified?: unknown;
+        reason?: unknown;
+        signatureAlgorithm?: unknown;
+        canonicalizationAlgorithm?: unknown;
+        referenceCount?: unknown;
+        referenceDigestsValid?: unknown;
+        referenceValidationReason?: unknown;
+      };
+    };
+    const xmlSignature = metadata?.xmlSignature;
+    if (!xmlSignature || typeof xmlSignature !== "object") {
+      return null;
+    }
+    return {
+      mode: typeof xmlSignature.mode === "string" ? xmlSignature.mode : null,
+      attempted: typeof xmlSignature.attempted === "boolean" ? xmlSignature.attempted : null,
+      verified: typeof xmlSignature.verified === "boolean" ? xmlSignature.verified : null,
+      reason: typeof xmlSignature.reason === "string" ? xmlSignature.reason : null,
+      signatureAlgorithm:
+        typeof xmlSignature.signatureAlgorithm === "string" ? xmlSignature.signatureAlgorithm : null,
+      canonicalizationAlgorithm:
+        typeof xmlSignature.canonicalizationAlgorithm === "string"
+          ? xmlSignature.canonicalizationAlgorithm
+          : null,
+      referenceCount: typeof xmlSignature.referenceCount === "number" ? xmlSignature.referenceCount : null,
+      referenceDigestsValid:
+        typeof xmlSignature.referenceDigestsValid === "boolean" ? xmlSignature.referenceDigestsValid : null,
+      referenceValidationReason:
+        typeof xmlSignature.referenceValidationReason === "string"
+          ? xmlSignature.referenceValidationReason
+          : null
+    };
+  } catch {
+    return null;
+  }
+};
+
 export const adminRoutes = new Hono<{ Bindings: EnvBindings }>();
 adminRoutes.use("/*", requireAdminApiKey);
 
@@ -191,6 +254,110 @@ adminRoutes.get("/system/status", async (context) => {
         return "optional";
       })()
     }
+  });
+});
+
+adminRoutes.get("/saml/signature-health", async (context) => {
+  const windowHoursRaw = Number.parseInt(context.req.query("hours") ?? "24", 10);
+  const windowHours = Number.isFinite(windowHoursRaw) ? Math.max(1, Math.min(windowHoursRaw, 24 * 30)) : 24;
+  const limitRaw = Number.parseInt(context.req.query("limit") ?? "2000", 10);
+  const limit = Number.isFinite(limitRaw) ? Math.max(100, Math.min(limitRaw, 10000)) : 2000;
+  const sinceIso = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
+
+  const rows = await context.env.DB
+    .prepare(
+      `SELECT metadata_json, created_at
+       FROM audit_logs
+       WHERE event_type = 'auth.sign_in_saml'
+         AND datetime(created_at) >= datetime(?)
+       ORDER BY datetime(created_at) DESC
+       LIMIT ?`
+    )
+    .bind(sinceIso, limit)
+    .all<SamlSignatureAuditRow>();
+
+  const items = rows.results ?? [];
+  const modeCounts: Record<string, number> = {};
+  const failureReasons: Record<string, number> = {};
+  let withSignatureMetadata = 0;
+  let verifiedCount = 0;
+  let failedCount = 0;
+  let referenceFailureCount = 0;
+  let missingSignatureMetadata = 0;
+  const samples: Array<{
+    createdAt: string;
+    mode: string | null;
+    verified: boolean | null;
+    reason: string | null;
+    referenceDigestsValid: boolean | null;
+    referenceValidationReason: string | null;
+  }> = [];
+
+  for (const item of items) {
+    const parsed = parseSamlSignatureAudit(item.metadata_json);
+    if (!parsed) {
+      missingSignatureMetadata += 1;
+      if (samples.length < 25) {
+        samples.push({
+          createdAt: item.created_at,
+          mode: null,
+          verified: null,
+          reason: null,
+          referenceDigestsValid: null,
+          referenceValidationReason: null
+        });
+      }
+      continue;
+    }
+
+    withSignatureMetadata += 1;
+    const mode = parsed.mode ?? "unknown";
+    modeCounts[mode] = (modeCounts[mode] ?? 0) + 1;
+    if (parsed.verified) {
+      verifiedCount += 1;
+    } else {
+      failedCount += 1;
+      const reason = parsed.reason || "unknown";
+      failureReasons[reason] = (failureReasons[reason] ?? 0) + 1;
+      if (parsed.referenceDigestsValid === false || parsed.referenceValidationReason) {
+        referenceFailureCount += 1;
+      }
+    }
+
+    if (samples.length < 25) {
+      samples.push({
+        createdAt: item.created_at,
+        mode: parsed.mode,
+        verified: parsed.verified,
+        reason: parsed.reason,
+        referenceDigestsValid: parsed.referenceDigestsValid,
+        referenceValidationReason: parsed.referenceValidationReason
+      });
+    }
+  }
+
+  const totalEvents = items.length;
+  const canEnableRequired = totalEvents > 0 && failedCount === 0 && missingSignatureMetadata === 0;
+
+  return context.json({
+    windowHours,
+    since: sinceIso,
+    totalEvents,
+    withSignatureMetadata,
+    missingSignatureMetadata,
+    verifiedCount,
+    failedCount,
+    referenceFailureCount,
+    verificationRate: totalEvents > 0 ? Number((verifiedCount / totalEvents).toFixed(4)) : 0,
+    modeCounts,
+    failureReasons,
+    recommendation: {
+      canEnableRequired,
+      message: canEnableRequired
+        ? "No signature verification failures detected in selected window; SAML_XMLSIG_MODE=required is likely safe."
+        : "Failures or missing signature metadata detected; keep optional mode and investigate failureReasons."
+    },
+    samples
   });
 });
 

@@ -2029,6 +2029,29 @@ export const revokeOrganizationInvitation = async (
   return (result.meta.changes ?? 0) > 0;
 };
 
+export const updateOrganizationInvitationExpiration = async (
+  db: D1Database,
+  params: {
+    organizationId: string;
+    invitationId: string;
+    expiresAt: string;
+  }
+): Promise<boolean> => {
+  const now = nowIso();
+  const result = await db
+    .prepare(
+      `UPDATE organization_invitations
+       SET expires_at = ?, updated_at = ?
+       WHERE id = ?
+         AND organization_id = ?
+         AND accepted_at IS NULL
+         AND revoked_at IS NULL`
+    )
+    .bind(params.expiresAt, now, params.invitationId, params.organizationId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+};
+
 export const acceptOrganizationInvitation = async (
   db: D1Database,
   params: {
