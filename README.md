@@ -9,6 +9,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - Password reset flow (`start` + `confirm`) with one-time tokens.
 - Session management APIs (list sessions, revoke one, revoke others, revoke all).
 - Organizations and teams with role-based memberships (`owner/admin/member`, `maintainer/member`).
+- Organization invitation flow (create/list/revoke/accept) with hosted sign-in invite link support.
 - Fine-grained organization policy engine (`allow/deny` rules by user/role/team/service account).
 - Personal API keys and organization service accounts with scoped machine keys.
 - Organization webhooks with signed delivery logs and retry endpoint.
@@ -68,6 +69,7 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `migrations/0011_mfa_totp.sql`: TOTP MFA factors/challenges/recovery codes.
 - `migrations/0012_scim.sql`: SCIM token storage.
 - `migrations/0013_enterprise_saml_compliance.sql`: SAML/domain routes/retention/export jobs/KMS key store.
+- `migrations/0014_org_invitations.sql`: organization invitation lifecycle tables/indexes.
 - `scripts/bootstrap-cloudflare.ps1`: one-command cloud bootstrap/deploy.
 - `packages/`: browser/react/nextjs/server SDK package stubs.
 - `tools/capability-evolver/`: autonomous analyze->mutate->validate->log engine.
@@ -108,10 +110,15 @@ Cloudflare-native auth platform targeting Clerk-like behavior with D1 storage an
 - `GET /v1/orgs` (Bearer)
 - `POST /v1/orgs` (Bearer)
 - `GET /v1/orgs/:orgId` (Bearer)
+- `GET /v1/orgs/invitations` (Bearer)
+- `POST /v1/orgs/invitations/:invitationId/accept` (Bearer)
 - `GET /v1/orgs/:orgId/members` (Bearer)
 - `POST /v1/orgs/:orgId/members` (Bearer)
 - `PATCH /v1/orgs/:orgId/members/:userId` (Bearer)
 - `DELETE /v1/orgs/:orgId/members/:userId` (Bearer)
+- `GET /v1/orgs/:orgId/invitations` (Bearer)
+- `POST /v1/orgs/:orgId/invitations` (Bearer)
+- `POST /v1/orgs/:orgId/invitations/:invitationId/revoke` (Bearer)
 - `GET /v1/orgs/:orgId/teams` (Bearer)
 - `POST /v1/orgs/:orgId/teams` (Bearer)
 - `GET /v1/orgs/:orgId/teams/:teamId/members` (Bearer)

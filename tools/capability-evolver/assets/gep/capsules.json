@@ -2,6 +2,19 @@
   "version": 1,
   "capsules": [
     {
+      "id": "run-e2e-smoke-f0daaab53156",
+      "geneId": "run-e2e-smoke",
+      "target": "src",
+      "summary": "Successful run-e2e-smoke cycle",
+      "createdAt": "2026-02-25T05:10:37.702Z",
+      "validations": [
+        {
+          "command": "npm run e2e:smoke",
+          "code": 0
+        }
+      ]
+    },
+    {
       "id": "run-e2e-smoke-9c90348d8699",
       "geneId": "run-e2e-smoke",
       "target": "src",

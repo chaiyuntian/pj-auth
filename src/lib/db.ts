@@ -174,6 +174,20 @@ export type OrganizationMembershipRow = {
   updated_at: string;
 };
 
+export type OrganizationInvitationRow = {
+  id: string;
+  organization_id: string;
+  email: string;
+  role: OrganizationRole;
+  invited_by_user_id: string;
+  expires_at: string;
+  accepted_by_user_id: string | null;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type TeamRow = {
   id: string;
   organization_id: string;
@@ -221,6 +235,11 @@ export type OrganizationMemberRow = OrganizationMembershipRow & {
   email_verified: number;
   user_created_at: string;
   user_updated_at: string;
+};
+
+export type OrganizationInvitationListItem = OrganizationInvitationRow & {
+  organization_slug: string;
+  organization_name: string;
 };
 
 export type TeamListItem = TeamRow & {
@@ -1821,6 +1840,215 @@ export const listOrganizationMembers = async (
     .bind(organizationId)
     .all<OrganizationMemberRow>();
   return result.results ?? [];
+};
+
+export const createOrganizationInvitation = async (
+  db: D1Database,
+  params: {
+    id: string;
+    organizationId: string;
+    email: string;
+    role: OrganizationRole;
+    invitedByUserId: string;
+    expiresAt: string;
+  }
+): Promise<void> => {
+  const now = nowIso();
+  await db
+    .prepare(
+      `INSERT INTO organization_invitations (
+        id,
+        organization_id,
+        email,
+        role,
+        invited_by_user_id,
+        expires_at,
+        accepted_by_user_id,
+        accepted_at,
+        revoked_at,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`
+    )
+    .bind(
+      params.id,
+      params.organizationId,
+      normalizeEmail(params.email),
+      params.role,
+      params.invitedByUserId,
+      params.expiresAt,
+      now,
+      now
+    )
+    .run();
+};
+
+export const listOrganizationInvitationsForOrganization = async (
+  db: D1Database,
+  params: {
+    organizationId: string;
+    limit?: number;
+  }
+): Promise<OrganizationInvitationRow[]> => {
+  const result = await db
+    .prepare(
+      `SELECT id,
+              organization_id,
+              email,
+              role,
+              invited_by_user_id,
+              expires_at,
+              accepted_by_user_id,
+              accepted_at,
+              revoked_at,
+              created_at,
+              updated_at
+       FROM organization_invitations
+       WHERE organization_id = ?
+       ORDER BY datetime(created_at) DESC
+       LIMIT ?`
+    )
+    .bind(params.organizationId, params.limit ?? 200)
+    .all<OrganizationInvitationRow>();
+  return result.results ?? [];
+};
+
+export const listPendingOrganizationInvitationsForEmail = async (
+  db: D1Database,
+  params: {
+    email: string;
+    limit?: number;
+  }
+): Promise<OrganizationInvitationListItem[]> => {
+  const now = nowIso();
+  const result = await db
+    .prepare(
+      `SELECT i.id,
+              i.organization_id,
+              i.email,
+              i.role,
+              i.invited_by_user_id,
+              i.expires_at,
+              i.accepted_by_user_id,
+              i.accepted_at,
+              i.revoked_at,
+              i.created_at,
+              i.updated_at,
+              o.slug AS organization_slug,
+              o.name AS organization_name
+       FROM organization_invitations i
+       INNER JOIN organizations o ON o.id = i.organization_id
+       WHERE lower(i.email) = lower(?)
+         AND i.accepted_at IS NULL
+         AND i.revoked_at IS NULL
+         AND datetime(i.expires_at) > datetime(?)
+       ORDER BY datetime(i.created_at) DESC
+       LIMIT ?`
+    )
+    .bind(normalizeEmail(params.email), now, params.limit ?? 200)
+    .all<OrganizationInvitationListItem>();
+  return result.results ?? [];
+};
+
+export const findOrganizationInvitationById = async (
+  db: D1Database,
+  invitationId: string
+): Promise<OrganizationInvitationRow | null> =>
+  db
+    .prepare(
+      `SELECT id,
+              organization_id,
+              email,
+              role,
+              invited_by_user_id,
+              expires_at,
+              accepted_by_user_id,
+              accepted_at,
+              revoked_at,
+              created_at,
+              updated_at
+       FROM organization_invitations
+       WHERE id = ?`
+    )
+    .bind(invitationId)
+    .first<OrganizationInvitationRow>();
+
+export const findPendingOrganizationInvitationByEmailInOrganization = async (
+  db: D1Database,
+  params: {
+    organizationId: string;
+    email: string;
+  }
+): Promise<OrganizationInvitationRow | null> => {
+  const now = nowIso();
+  return db
+    .prepare(
+      `SELECT id,
+              organization_id,
+              email,
+              role,
+              invited_by_user_id,
+              expires_at,
+              accepted_by_user_id,
+              accepted_at,
+              revoked_at,
+              created_at,
+              updated_at
+       FROM organization_invitations
+       WHERE organization_id = ?
+         AND lower(email) = lower(?)
+         AND accepted_at IS NULL
+         AND revoked_at IS NULL
+         AND datetime(expires_at) > datetime(?)
+       ORDER BY datetime(created_at) DESC
+       LIMIT 1`
+    )
+    .bind(params.organizationId, normalizeEmail(params.email), now)
+    .first<OrganizationInvitationRow>();
+};
+
+export const revokeOrganizationInvitation = async (
+  db: D1Database,
+  params: {
+    organizationId: string;
+    invitationId: string;
+  }
+): Promise<boolean> => {
+  const now = nowIso();
+  const result = await db
+    .prepare(
+      `UPDATE organization_invitations
+       SET revoked_at = ?, updated_at = ?
+       WHERE id = ?
+         AND organization_id = ?
+         AND accepted_at IS NULL
+         AND revoked_at IS NULL`
+    )
+    .bind(now, now, params.invitationId, params.organizationId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+};
+
+export const acceptOrganizationInvitation = async (
+  db: D1Database,
+  params: {
+    invitationId: string;
+    acceptedByUserId: string;
+  }
+): Promise<boolean> => {
+  const now = nowIso();
+  const result = await db
+    .prepare(
+      `UPDATE organization_invitations
+       SET accepted_by_user_id = ?, accepted_at = ?, updated_at = ?
+       WHERE id = ?
+         AND accepted_at IS NULL
+         AND revoked_at IS NULL
+         AND datetime(expires_at) > datetime(?)`
+    )
+    .bind(params.acceptedByUserId, now, now, params.invitationId, now)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
 };
 
 export const countOrganizationOwners = async (db: D1Database, organizationId: string): Promise<number> => {

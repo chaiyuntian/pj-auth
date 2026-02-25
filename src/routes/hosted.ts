@@ -83,8 +83,28 @@ const widgetScript = `(() => {
       const email = this.shadowRoot.getElementById("email").value;
       const password = this.shadowRoot.getElementById("password").value;
       const payload = await this.request("/v1/auth/sign-in", "POST", { email, password });
-      this.setOutput(JSON.stringify(payload, null, 2));
-      this.dispatchEvent(new CustomEvent("pj-auth-success", { detail: payload }));
+      const inviteId = new URL(window.location.href).searchParams.get("invite_id");
+      let invitation = null;
+      let invitationError = null;
+      if (inviteId && this.token()) {
+        try {
+          invitation = await this.request(
+            "/v1/orgs/invitations/" + encodeURIComponent(inviteId) + "/accept",
+            "POST",
+            {},
+            true
+          );
+        } catch (error) {
+          invitationError = error?.message || String(error);
+        }
+      }
+      const result = {
+        signIn: payload,
+        invitation,
+        invitationError
+      };
+      this.setOutput(JSON.stringify(result, null, 2));
+      this.dispatchEvent(new CustomEvent("pj-auth-success", { detail: result }));
     }
 
     async handleGoogle() {

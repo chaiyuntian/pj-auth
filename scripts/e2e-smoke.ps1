@@ -198,13 +198,27 @@ if (-not $orgs.organizations -or $orgs.organizations.Count -lt 1) {
   throw "No organizations returned"
 }
 
-Write-Host "Adding second user to organization"
-$addMember = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/orgs/$orgId/members" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body (@{
+Write-Host "Creating organization invitation for second user"
+$invite = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/orgs/$orgId/invitations" -Headers @{ Authorization = "Bearer $token" } -ContentType "application/json" -Body (@{
   email = $email2
   role = "member"
+  expiresInHours = 24
 } | ConvertTo-Json -Compress)
-if ($addMember.user.email -ne $email2) {
-  throw "Second user was not added to organization"
+if (-not $invite.invitation.id) {
+  throw "Organization invitation creation failed"
+}
+$inviteId = $invite.invitation.id
+
+Write-Host "Listing pending invitations for invited user"
+$myInvites = Invoke-RestMethod -Method Get -Uri "$BaseUrl/v1/orgs/invitations" -Headers @{ Authorization = "Bearer $token2" }
+if (-not $myInvites.invitations -or $myInvites.invitations.Count -lt 1) {
+  throw "Invited user cannot see pending invitations"
+}
+
+Write-Host "Accepting organization invitation as invited user"
+$acceptInvite = Invoke-RestMethod -Method Post -Uri "$BaseUrl/v1/orgs/invitations/$inviteId/accept" -Headers @{ Authorization = "Bearer $token2" } -ContentType "application/json" -Body "{}"
+if (-not $acceptInvite.membership -or $acceptInvite.membership.role -ne "member") {
+  throw "Invitation acceptance failed"
 }
 
 Write-Host "Creating SCIM token"

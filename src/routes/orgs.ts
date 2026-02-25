@@ -7,6 +7,7 @@ import {
   countOrganizationOwners,
   countOrganizationTeams,
   createApiKey,
+  createOrganizationInvitation,
   createOrganizationWithOwner,
   createServiceAccount,
   createScimToken,
@@ -15,6 +16,7 @@ import {
   disableServiceAccount,
   findOrganizationById,
   findOrganizationBySlug,
+  findOrganizationInvitationById,
   findOrganizationMembership,
   findServiceAccountByIdInOrganization,
   findTeamByIdInOrganization,
@@ -22,9 +24,13 @@ import {
   findTeamMembership,
   findWebhookEndpointByIdInOrganization,
   findUserByEmail,
+  findUserById,
+  findPendingOrganizationInvitationByEmailInOrganization,
+  listOrganizationInvitationsForOrganization,
   listOrganizationMembers,
   listOrganizationPolicies,
   listOrganizationsForUser,
+  listPendingOrganizationInvitationsForEmail,
   listServiceAccountApiKeys,
   listServiceAccountsForOrganization,
   listScimTokensForOrganization,
@@ -35,8 +41,11 @@ import {
   removeOrganizationMembership,
   removeOrganizationPolicy,
   revokeScimToken,
+  revokeOrganizationInvitation,
   revokeServiceAccountApiKey,
+  acceptOrganizationInvitation,
   removeTeamMembership,
+  type OrganizationInvitationRow,
   type OrganizationMembershipRow,
   type OrganizationRole,
   type OrganizationPolicySubjectType,
@@ -55,6 +64,8 @@ import { addSecondsToIso } from "../lib/time";
 import { sha256Hex } from "../lib/crypto";
 import { emitOrganizationWebhookEvent } from "../lib/webhooks";
 import { evaluateOrganizationPermission } from "../lib/policy";
+import { sendTransactionalEmail } from "../lib/mailer";
+import { getAppUrl } from "../lib/config";
 
 const organizationRoleSchema = z.enum(["owner", "admin", "member"]);
 const teamRoleSchema = z.enum(["maintainer", "member"]);
@@ -76,6 +87,12 @@ const upsertOrganizationMemberSchema = z.object({
 
 const updateOrganizationMemberRoleSchema = z.object({
   role: organizationRoleSchema
+});
+
+const createOrganizationInvitationSchema = z.object({
+  email: z.string().email().min(3).max(320),
+  role: organizationRoleSchema.optional(),
+  expiresInHours: z.number().int().min(1).max(24 * 30).optional()
 });
 
 const createTeamSchema = z.object({
@@ -163,6 +180,15 @@ const invalidBody = (issues: z.ZodIssue[]) => ({
 
 const isOrganizationOwner = (role: OrganizationRole): boolean => role === "owner";
 
+const roleRank: Record<OrganizationRole, number> = {
+  member: 1,
+  admin: 2,
+  owner: 3
+};
+
+const maxOrganizationRole = (left: OrganizationRole, right: OrganizationRole): OrganizationRole =>
+  roleRank[left] >= roleRank[right] ? left : right;
+
 const slugify = (rawValue: string, fallback: string): string => {
   const normalized = rawValue
     .trim()
@@ -229,6 +255,52 @@ const formatOrganization = (organization: OrganizationRow) => ({
   name: organization.name,
   createdAt: organization.created_at,
   updatedAt: organization.updated_at
+});
+
+const getInvitationStatus = (
+  invitation: Pick<OrganizationInvitationRow, "accepted_at" | "revoked_at" | "expires_at">
+): "pending" | "accepted" | "revoked" | "expired" => {
+  if (invitation.accepted_at) {
+    return "accepted";
+  }
+  if (invitation.revoked_at) {
+    return "revoked";
+  }
+  if (Date.parse(invitation.expires_at) <= Date.now()) {
+    return "expired";
+  }
+  return "pending";
+};
+
+const formatOrganizationInvitation = (
+  invitation: OrganizationInvitationRow,
+  options?: {
+    organization?: {
+      id: string;
+      slug: string;
+      name: string;
+    };
+  }
+) => ({
+  id: invitation.id,
+  organizationId: invitation.organization_id,
+  organization: options?.organization
+    ? {
+        id: options.organization.id,
+        slug: options.organization.slug,
+        name: options.organization.name
+      }
+    : undefined,
+  email: invitation.email,
+  role: invitation.role,
+  status: getInvitationStatus(invitation),
+  invitedByUserId: invitation.invited_by_user_id,
+  expiresAt: invitation.expires_at,
+  acceptedByUserId: invitation.accepted_by_user_id,
+  acceptedAt: invitation.accepted_at,
+  revokedAt: invitation.revoked_at,
+  createdAt: invitation.created_at,
+  updatedAt: invitation.updated_at
 });
 
 const loadOrganizationAccess = async (params: {
@@ -416,6 +488,178 @@ orgRoutes.post("", async (context) => {
     },
     201
   );
+});
+
+orgRoutes.get("/invitations", async (context) => {
+  const userId = context.get("authUserId");
+  const user = await findUserById(context.env.DB, userId);
+  if (!user) {
+    return context.json(
+      {
+        error: {
+          code: "USER_NOT_FOUND",
+          message: "Current user cannot be loaded"
+        }
+      },
+      404
+    );
+  }
+
+  const limitRaw = Number.parseInt(context.req.query("limit") ?? "100", 10);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 500)) : 100;
+  const invitations = await listPendingOrganizationInvitationsForEmail(context.env.DB, {
+    email: user.email,
+    limit
+  });
+  return context.json({
+    invitations: invitations.map((invitation) =>
+      formatOrganizationInvitation(invitation, {
+        organization: {
+          id: invitation.organization_id,
+          slug: invitation.organization_slug,
+          name: invitation.organization_name
+        }
+      })
+    )
+  });
+});
+
+orgRoutes.post("/invitations/:invitationId/accept", async (context) => {
+  const invitationId = context.req.param("invitationId");
+  const userId = context.get("authUserId");
+
+  const [invitation, user] = await Promise.all([
+    findOrganizationInvitationById(context.env.DB, invitationId),
+    findUserById(context.env.DB, userId)
+  ]);
+  if (!invitation) {
+    return context.json(
+      {
+        error: {
+          code: "INVITATION_NOT_FOUND",
+          message: "Invitation does not exist"
+        }
+      },
+      404
+    );
+  }
+  if (!user) {
+    return context.json(
+      {
+        error: {
+          code: "USER_NOT_FOUND",
+          message: "Current user cannot be loaded"
+        }
+      },
+      404
+    );
+  }
+
+  if (getInvitationStatus(invitation) !== "pending") {
+    return context.json(
+      {
+        error: {
+          code: "INVITATION_NOT_PENDING",
+          message: "Invitation is no longer pending"
+        }
+      },
+      409
+    );
+  }
+
+  if (user.email.trim().toLowerCase() !== invitation.email.trim().toLowerCase()) {
+    return context.json(
+      {
+        error: {
+          code: "INVITATION_EMAIL_MISMATCH",
+          message: "Invitation email does not match the current user"
+        }
+      },
+      403
+    );
+  }
+
+  const organization = await findOrganizationById(context.env.DB, invitation.organization_id);
+  if (!organization) {
+    return context.json(
+      {
+        error: {
+          code: "ORGANIZATION_NOT_FOUND",
+          message: "Invitation organization does not exist"
+        }
+      },
+      404
+    );
+  }
+
+  const accepted = await acceptOrganizationInvitation(context.env.DB, {
+    invitationId,
+    acceptedByUserId: userId
+  });
+  if (!accepted) {
+    return context.json(
+      {
+        error: {
+          code: "INVITATION_NOT_PENDING",
+          message: "Invitation is no longer pending"
+        }
+      },
+      409
+    );
+  }
+
+  const existingMembership = await findOrganizationMembership(context.env.DB, invitation.organization_id, userId);
+  const assignedRole = existingMembership
+    ? maxOrganizationRole(existingMembership.role, invitation.role)
+    : invitation.role;
+  await upsertOrganizationMembership(context.env.DB, {
+    organizationId: invitation.organization_id,
+    userId,
+    role: assignedRole
+  });
+
+  await writeAuditLog(context.env.DB, {
+    id: crypto.randomUUID(),
+    actorType: "user",
+    actorId: userId,
+    eventType: "org.invitation_accepted",
+    metadataJson: JSON.stringify({
+      organizationId: invitation.organization_id,
+      invitationId,
+      role: assignedRole
+    })
+  });
+  await emitOrgWebhookSafely({
+    env: context.env,
+    organizationId: invitation.organization_id,
+    eventType: "org.invitation.accepted",
+    payload: {
+      invitationId,
+      userId,
+      role: assignedRole
+    }
+  });
+
+  const latestInvitation = await findOrganizationInvitationById(context.env.DB, invitationId);
+  if (!latestInvitation) {
+    return context.json(
+      {
+        error: {
+          code: "INVITATION_NOT_FOUND",
+          message: "Accepted invitation cannot be loaded"
+        }
+      },
+      500
+    );
+  }
+
+  return context.json({
+    organization: formatOrganization(organization),
+    invitation: formatOrganizationInvitation(latestInvitation),
+    membership: {
+      role: assignedRole
+    }
+  });
 });
 
 orgRoutes.get("/:orgId", async (context) => {
@@ -843,6 +1087,316 @@ orgRoutes.delete("/:orgId/members/:userId", async (context) => {
   return context.json({
     ok: true,
     userId: targetUserId
+  });
+});
+
+orgRoutes.get("/:orgId/invitations", async (context) => {
+  const organizationId = context.req.param("orgId");
+  const access = await loadOrganizationAccess({
+    db: context.env.DB,
+    organizationId,
+    userId: context.get("authUserId")
+  });
+  if (!access) {
+    return context.json(
+      {
+        error: {
+          code: "ORGANIZATION_NOT_FOUND_OR_FORBIDDEN",
+          message: "Organization does not exist or you do not have access"
+        }
+      },
+      404
+    );
+  }
+  if (
+    !(await hasOrganizationPermission({
+      db: context.env.DB,
+      organizationId,
+      membership: access.membership,
+      resource: "members",
+      action: "manage"
+    }))
+  ) {
+    return context.json(
+      {
+        error: {
+          code: "FORBIDDEN",
+          message: "Only organization owners/admins can manage invitations"
+        }
+      },
+      403
+    );
+  }
+
+  const limitRaw = Number.parseInt(context.req.query("limit") ?? "100", 10);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, 500)) : 100;
+  const invitations = await listOrganizationInvitationsForOrganization(context.env.DB, {
+    organizationId,
+    limit
+  });
+  return context.json({
+    organization: formatOrganization(access.organization),
+    invitations: invitations.map((invitation) => formatOrganizationInvitation(invitation))
+  });
+});
+
+orgRoutes.post("/:orgId/invitations", async (context) => {
+  const organizationId = context.req.param("orgId");
+  const currentUserId = context.get("authUserId");
+  const access = await loadOrganizationAccess({
+    db: context.env.DB,
+    organizationId,
+    userId: currentUserId
+  });
+  if (!access) {
+    return context.json(
+      {
+        error: {
+          code: "ORGANIZATION_NOT_FOUND_OR_FORBIDDEN",
+          message: "Organization does not exist or you do not have access"
+        }
+      },
+      404
+    );
+  }
+  if (
+    !(await hasOrganizationPermission({
+      db: context.env.DB,
+      organizationId,
+      membership: access.membership,
+      resource: "members",
+      action: "manage"
+    }))
+  ) {
+    return context.json(
+      {
+        error: {
+          code: "FORBIDDEN",
+          message: "Only organization owners/admins can manage invitations"
+        }
+      },
+      403
+    );
+  }
+
+  const payload = await readJsonBody(context.req.raw);
+  const parsed = createOrganizationInvitationSchema.safeParse(payload);
+  if (!parsed.success) {
+    return context.json(invalidBody(parsed.error.issues), 400);
+  }
+
+  const role = parsed.data.role ?? "member";
+  if (role === "owner" && !isOrganizationOwner(access.membership.role)) {
+    return context.json(
+      {
+        error: {
+          code: "FORBIDDEN",
+          message: "Only owners can invite other owners"
+        }
+      },
+      403
+    );
+  }
+
+  const email = parsed.data.email.trim().toLowerCase();
+  const invitedUser = await findUserByEmail(context.env.DB, email);
+  if (invitedUser) {
+    const existingMembership = await findOrganizationMembership(context.env.DB, organizationId, invitedUser.id);
+    if (existingMembership) {
+      return context.json(
+        {
+          error: {
+            code: "ALREADY_MEMBER",
+            message: "This user is already an organization member"
+          }
+        },
+        409
+      );
+    }
+  }
+
+  const existingInvitation = await findPendingOrganizationInvitationByEmailInOrganization(context.env.DB, {
+    organizationId,
+    email
+  });
+  if (existingInvitation) {
+    return context.json(
+      {
+        error: {
+          code: "INVITATION_ALREADY_PENDING",
+          message: "A pending invitation already exists for this email",
+          invitation: formatOrganizationInvitation(existingInvitation)
+        }
+      },
+      409
+    );
+  }
+
+  const invitationId = crypto.randomUUID();
+  const expiresInHours = parsed.data.expiresInHours ?? 24 * 7;
+  const expiresAt = addSecondsToIso(expiresInHours * 60 * 60);
+  await createOrganizationInvitation(context.env.DB, {
+    id: invitationId,
+    organizationId,
+    email,
+    role,
+    invitedByUserId: currentUserId,
+    expiresAt
+  });
+
+  const invitation = await findOrganizationInvitationById(context.env.DB, invitationId);
+  if (!invitation) {
+    return context.json(
+      {
+        error: {
+          code: "INVITATION_CREATE_FAILED",
+          message: "Invitation was created but cannot be loaded"
+        }
+      },
+      500
+    );
+  }
+
+  const signInUrl = new URL("/hosted/sign-in", getAppUrl(context.env, context.req.raw));
+  signInUrl.searchParams.set("invite_id", invitation.id);
+  const delivery = await sendTransactionalEmail({
+    env: context.env,
+    to: email,
+    subject: `Invitation to join ${access.organization.name} on PajamaDot`,
+    text: `You were invited to join ${access.organization.name} as ${role}.\n\nSign in to accept your invitation:\n${signInUrl.toString()}\n\nThis invitation expires at ${invitation.expires_at}.`,
+    html: `<p>You were invited to join <strong>${access.organization.name}</strong> as <strong>${role}</strong>.</p><p>Sign in to accept your invitation:</p><p><a href="${signInUrl.toString()}">${signInUrl.toString()}</a></p><p>This invitation expires at ${invitation.expires_at}.</p>`
+  });
+
+  await writeAuditLog(context.env.DB, {
+    id: crypto.randomUUID(),
+    actorType: "user",
+    actorId: currentUserId,
+    eventType: "org.invitation_created",
+    metadataJson: JSON.stringify({
+      organizationId,
+      invitationId: invitation.id,
+      email,
+      role,
+      expiresAt: invitation.expires_at,
+      delivery
+    })
+  });
+  await emitOrgWebhookSafely({
+    env: context.env,
+    organizationId,
+    eventType: "org.invitation.created",
+    payload: {
+      invitationId: invitation.id,
+      email,
+      role,
+      expiresAt: invitation.expires_at,
+      invitedByUserId: currentUserId
+    }
+  });
+
+  return context.json(
+    {
+      organization: formatOrganization(access.organization),
+      invitation: formatOrganizationInvitation(invitation),
+      delivery,
+      inviteSignInUrl: signInUrl.toString()
+    },
+    201
+  );
+});
+
+orgRoutes.post("/:orgId/invitations/:invitationId/revoke", async (context) => {
+  const organizationId = context.req.param("orgId");
+  const invitationId = context.req.param("invitationId");
+  const currentUserId = context.get("authUserId");
+  const access = await loadOrganizationAccess({
+    db: context.env.DB,
+    organizationId,
+    userId: currentUserId
+  });
+  if (!access) {
+    return context.json(
+      {
+        error: {
+          code: "ORGANIZATION_NOT_FOUND_OR_FORBIDDEN",
+          message: "Organization does not exist or you do not have access"
+        }
+      },
+      404
+    );
+  }
+  if (
+    !(await hasOrganizationPermission({
+      db: context.env.DB,
+      organizationId,
+      membership: access.membership,
+      resource: "members",
+      action: "manage"
+    }))
+  ) {
+    return context.json(
+      {
+        error: {
+          code: "FORBIDDEN",
+          message: "Only organization owners/admins can manage invitations"
+        }
+      },
+      403
+    );
+  }
+
+  const invitation = await findOrganizationInvitationById(context.env.DB, invitationId);
+  if (!invitation || invitation.organization_id !== organizationId) {
+    return context.json(
+      {
+        error: {
+          code: "INVITATION_NOT_FOUND",
+          message: "Invitation does not exist in this organization"
+        }
+      },
+      404
+    );
+  }
+
+  const revoked = await revokeOrganizationInvitation(context.env.DB, {
+    organizationId,
+    invitationId
+  });
+  if (!revoked) {
+    return context.json(
+      {
+        error: {
+          code: "INVITATION_NOT_PENDING",
+          message: "Invitation is no longer pending"
+        }
+      },
+      409
+    );
+  }
+
+  await writeAuditLog(context.env.DB, {
+    id: crypto.randomUUID(),
+    actorType: "user",
+    actorId: currentUserId,
+    eventType: "org.invitation_revoked",
+    metadataJson: JSON.stringify({
+      organizationId,
+      invitationId
+    })
+  });
+  await emitOrgWebhookSafely({
+    env: context.env,
+    organizationId,
+    eventType: "org.invitation.revoked",
+    payload: {
+      invitationId,
+      revokedByUserId: currentUserId
+    }
+  });
+
+  return context.json({
+    ok: true,
+    invitationId
   });
 });
 
